@@ -153,7 +153,9 @@ def test_an_unbuilt_spa_is_a_hint_not_a_crash(tmp_path, monkeypatch, capsys):
     import uvicorn
 
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: seen.update(app=app, **kw))
+    # An explicit empty directory: the repo's own web/dist exists once the SPA is
+    # built, so relying on it being absent would make this test depend on build state.
     assert main(["serve", "--db", str(database), "--config", str(tmp_path / "config.toml"),
-                 "--api", "--port", "8099"]) == 0
+                 "--api", "--port", "8099", "--static-dir", str(tmp_path / "no-such-dist")]) == 0
     assert "no built SPA" in capsys.readouterr().err
     assert seen["port"] == 8099
