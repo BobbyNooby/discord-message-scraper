@@ -179,3 +179,24 @@ def test_a_second_rebuild_replaces_rather_than_appends(seeded_db, cfg):
     first = rebuild_all(seeded_db, cfg)
     second = rebuild_all(seeded_db, cfg)
     assert first == second
+
+
+def test_rebuild_reads_the_message_table_a_bounded_number_of_times(seeded_db, cfg):
+    """Fourteen families, not fourteen scans of a 783 MB table.
+
+    Measured before this bound existed: ~20 statements touched `messages` and
+    seven of them re-read the 483 MB `raw` column, which is where the 175 s came
+    from. The budget is a guard rail, not a benchmark.
+    """
+    seen: list[str] = []
+    seeded_db.set_trace_callback(seen.append)
+    try:
+        rebuild_all(seeded_db, cfg)
+    finally:
+        seeded_db.set_trace_callback(None)
+
+    scans = [statement for statement in seen if "FROM MESSAGES" in statement.upper()]
+    wide = [statement for statement in scans if " RAW" in statement.upper()
+            or "CONTENT" in statement.upper()]
+    assert len(scans) <= 6, scans
+    assert len(wide) <= 2, wide
