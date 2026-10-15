@@ -9,7 +9,7 @@ the failure this table exists to prevent.
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 
 def _now() -> str:
@@ -35,3 +35,31 @@ def worker_state(conn: sqlite3.Connection, key: str) -> str | None:
 def record_worker_seen(conn: sqlite3.Connection, now: str | None = None) -> None:
     """The heartbeat the admin board reads to tell "idle" from "died"."""
     set_worker_state(conn, "last_seen_at", now or _now())
+
+
+# The banner's thresholds (spec §11.7). Three days is the point where "the data
+# is old" stops being a rounding error and starts being a lie.
+STALE_AFTER_DAYS = 3
+
+
+def banner_for(stored: dict[str, str]) -> str | None:
+    """``None`` (healthy), ``"stale"`` (amber) or ``"token_dead"`` (red).
+
+    A dead token wins: it is the cause, and stale data is the symptom. "Never
+    ingested" counts as stale rather than healthy, because a site with no data
+    that reports itself fine is the exact failure §11.7 exists to prevent.
+    """
+    if str(stored.get("token_status", "")).lower() == "dead":
+        return "token_dead"
+    stamp = stored.get("last_ingest_at")
+    if not stamp:
+        return "stale"
+    try:
+        when = datetime.fromisoformat(str(stamp))
+    except ValueError:
+        return "stale"
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) - when >= timedelta(days=STALE_AFTER_DAYS):
+        return "stale"
+    return None
