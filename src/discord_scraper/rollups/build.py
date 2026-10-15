@@ -154,8 +154,14 @@ def _name_tokens(conn: sqlite3.Connection) -> set[str]:
     return found
 
 
-def _config_hash(cfg: Config) -> str:
-    """Fingerprint of the word-list inputs, so a config edit is visible."""
+def config_digest(cfg: Config) -> str:
+    """Fingerprint of the word-list inputs, so a config edit is detectable.
+
+    Public because the CLI's `status` compares it: a stopword edit changes what
+    `rollup_word` should contain without changing a single source row, so the
+    message fingerprint alone would report "current" (§5.2 stores this to make
+    that comparison possible).
+    """
     parts = [",".join(sorted(cfg.stopword_packs)), ",".join(sorted(cfg.ignore_words))]
     parts.append(",".join(sorted(load_stopwords(cfg))))
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:32]
@@ -417,7 +423,7 @@ def rebuild_all(conn: sqlite3.Connection, cfg: Config, *, now: str | None = None
     create_rollup_tables(conn)
     ids = resolve_identities(conn, cfg)
     stamp = now or datetime.now().astimezone().isoformat(timespec="seconds")
-    config_hash = _config_hash(cfg)
+    config_hash = config_digest(cfg)
     # The fingerprint is the whole channel, not the counted subset: provenance
     # answers "which state of messages produced these rows?", and staleness is a
     # comparison against the same thing. Fingerprinting the filtered subset would

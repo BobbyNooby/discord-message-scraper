@@ -32,7 +32,17 @@ def build_parser() -> argparse.ArgumentParser:
     analyze = sub.add_parser("analyze", help="run the analysis CLI")
     analyze.add_argument("args", nargs=argparse.REMAINDER)
 
-    sub.add_parser("rollups", help="build and inspect the rollup tables")
+    rollups = sub.add_parser("rollups", help="build and inspect the rollup tables")
+    actions = rollups.add_subparsers(dest="rollup_command", metavar="<action>")
+    rebuild = actions.add_parser("rebuild", help="rebuild every rollup family from messages")
+    status = actions.add_parser("status", help="row counts and staleness per family")
+    for action in (rebuild, status):
+        action.add_argument("--db", required=True, help="path to messages.db")
+        action.add_argument("--channel", default=None,
+                            help="channel id (default: the only channel in the database)")
+    for action in (rebuild, status):
+        action.add_argument("--config", default=None,
+                            help="config.toml to compare against (default: the checkout's)")
     sub.add_parser("serve", help="run the web API and the ingest worker")
 
     return parser
@@ -60,9 +70,142 @@ def main(argv: list[str] | None = None) -> int:
 
         return analysis_main(args.args) or 0
 
-    if args.command in ("rollups", "serve"):
-        print(f"'{args.command}' is not implemented yet.", file=sys.stderr)
+    if args.command == "rollups":
+        return _rollups(args)
+
+    if args.command == "serve":
+        print("'serve' is not implemented yet.", file=sys.stderr)
         return 2
 
     parser.print_help()
+    return 0
+
+
+def _connect(path: str):
+    import sqlite3
+
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=10000")
+    return conn
+
+
+def _has_table(conn, name: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
+    ).fetchone() is not None
+
+
+def _channels(conn) -> list[str]:
+    return [row[0] for row in conn.execute("SELECT DISTINCT channel_id FROM messages")]
+
+
+def _channel_of(conn, explicit: str | None) -> tuple[str | None, str | None]:
+    """``(channel, error)``: the flag, else the database's only channel.
+
+    A database holding several channels has no obvious answer, so it says so
+    rather than reporting on an arbitrary one.
+    """
+    if explicit:
+        return explicit, None
+    found = _channels(conn)
+    if not found:
+        return None, "no messages"
+    if len(found) > 1:
+        return None, f"database holds {len(found)} channels; pass --channel"
+    return found[0], None
+
+
+def _report(family: str, width: int, rows: int, state: str) -> None:
+    print(f"{family:<{width}}  {rows:>7} rows  {state}")
+
+
+def _rollups_status(args) -> int:
+    from pathlib import Path
+
+    from discord_scraper.rollups.build import config_digest
+    from discord_scraper.rollups.schema import FAMILIES, is_stale
+
+    if not Path(args.db).exists():
+        print(f"no database at {args.db}", file=sys.stderr)
+        return 2
+    digest = _digest_for(args.config)
+    conn = _connect(args.db)
+    try:
+        channel, problem = _channel_of(conn, args.channel)
+        if channel is None:
+            print(f"{problem} in {args.db}")
+            return 0
+        width = max(len(family) for family in FAMILIES)
+        built = _has_table(conn, "rollup_meta")
+        for family in FAMILIES:
+            table = f"rollup_{family}"
+            rows = (
+                conn.execute(f"SELECT COUNT(*) FROM {table} WHERE channel_id = ?",
+                             (channel,)).fetchone()[0]
+                if _has_table(conn, table) else 0
+            )
+            stale = not built or is_stale(conn, channel, family, config_hash=digest)
+            _report(family, width, rows, "stale" if stale else "current")
+        return 0
+    finally:
+        conn.close()
+
+
+def _digest_for(config_path: str | None) -> str | None:
+    """The word-list digest, or ``None`` when there is no usable config.
+
+    ``status`` stays useful without one (source-row staleness still works), so a
+    missing or unreadable config is not an error here.
+    """
+    from pathlib import Path
+
+    from discord_scraper.config import PROJECT_DIR, config_from_settings, load_settings
+    from discord_scraper.rollups.build import config_digest
+
+    path = Path(config_path) if config_path else PROJECT_DIR / "config.toml"
+    try:
+        return config_digest(config_from_settings(load_settings(config_path=path)))
+    except SystemExit:
+        return None
+
+
+def _rollups_rebuild(args) -> int:
+    from dataclasses import replace
+    from pathlib import Path
+
+    from discord_scraper.config import PROJECT_DIR, config_from_settings, load_settings
+    from discord_scraper.rollups.build import rebuild_all
+    from discord_scraper.rollups.schema import FAMILIES
+
+    if not Path(args.db).exists():
+        print(f"no database at {args.db}", file=sys.stderr)
+        return 2
+    config_path = Path(args.config) if args.config else PROJECT_DIR / "config.toml"
+    try:
+        settings = load_settings(config_path=config_path)
+    except SystemExit as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if args.channel:
+        settings = replace(settings, channel_id=args.channel)
+
+    conn = _connect(args.db)
+    try:
+        counts = rebuild_all(conn, config_from_settings(settings))
+    finally:
+        conn.close()
+
+    width = max(len(family) for family in FAMILIES)
+    for family in FAMILIES:
+        _report(family, width, counts[family], "rebuilt")
+    return 0
+
+
+def _rollups(args) -> int:
+    if args.rollup_command == "rebuild":
+        return _rollups_rebuild(args)
+    if args.rollup_command == "status":
+        return _rollups_status(args)
+    build_parser().parse_args(["rollups", "--help"])
     return 0
