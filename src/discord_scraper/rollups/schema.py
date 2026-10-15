@@ -157,6 +157,16 @@ CREATE TABLE IF NOT EXISTS rollup_type (
   PRIMARY KEY (channel_id, type)
 );
 
+-- Totals the capped grains cannot answer: how many messages carry a link, how
+-- many distinct hosts exist before the top-60 cut, and how many messages carry
+-- both a link and an embed (spec §5.11 measures all three).
+CREATE TABLE IF NOT EXISTS rollup_stats (
+  channel_id TEXT NOT NULL,
+  key        TEXT NOT NULL,
+  value      INTEGER NOT NULL,
+  PRIMARY KEY (channel_id, key)
+);
+
 CREATE TABLE IF NOT EXISTS rollup_meta (
   channel_id            TEXT NOT NULL,
   family                TEXT NOT NULL,
@@ -331,9 +341,14 @@ def is_stale(
         return True
     if config_hash is not None and recorded["config_hash"] != config_hash:
         return True
-    current_count, current_max = conn.execute(
-        "SELECT COUNT(*), MAX(id) FROM messages WHERE channel_id = ?", (channel_id,)
-    ).fetchone()
+    try:
+        current_count, current_max = conn.execute(
+            "SELECT COUNT(*), MAX(id) FROM messages WHERE channel_id = ?", (channel_id,)
+        ).fetchone()
+    except sqlite3.OperationalError:
+        # No messages table at all: nothing can be current, and guessing
+        # "current" is the failure this flag exists to prevent.
+        return True
     return (
         int(recorded["source_count"]) != int(current_count or 0)
         or (recorded["source_max_message_id"] or "") != (current_max or "")
