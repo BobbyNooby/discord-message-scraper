@@ -38,6 +38,8 @@ output/
   messages.db         the database (created on first run)
 sql/
   analysis.sql        starter queries for analysis
+tests/
+  test_catch_up.py    resume behaviour, against a temp DB and a fake API
 .env                  DISCORD_TOKEN + CHANNEL_ID (gitignored)
 ```
 
@@ -62,7 +64,12 @@ python3 main.py --batch-size 25    # gentler on the API (1-100; default 50)
 Safe to interrupt (Ctrl-C) and re-run at any time:
 
 - `INSERT OR IGNORE` on message ID — no duplicate rows
-- resume point (`oldest_id`) persisted in a `meta` table
+- resume points persisted in a `meta` table: `oldest_id` for the older end,
+  and `catchup_cursor` for the bottom of a hole left by a catch-up pass that
+  was killed part-way. The cursor is what makes an interrupted *update*
+  recoverable: the next run skips down past the stripe it already wrote and
+  keeps going into the hole, instead of stopping at the first batch it
+  recognises and leaving the hole behind.
 - newest-first "catch-up" pass grabs messages newer than the DB, then a
   "backfill" pass continues older history from the resume point
 - 50 messages per request by default — tune with `--batch-size` or `BATCH_SIZE`
@@ -82,6 +89,17 @@ much of the channel's **time span** your history covers, from channel creation
 (decoded from the channel-id snowflake) to the newest message. It is only a
 rough proxy for message progress — quiet months move the bar quickly, busy
 months slowly — and it hovers below 100% until the first message is reached.
+
+## Tests
+
+```sh
+python3 -m unittest discover -s tests -t .
+```
+
+Stdlib `unittest`, no dependencies, no network. The catch-up tests run against
+a temp SQLite file with only the HTTP call faked, and cover the resume paths:
+a pass killed mid-update, a re-run that is already current, a `--max-batches`
+stop, and new messages arriving while a hole is still open.
 
 ## Schema
 
