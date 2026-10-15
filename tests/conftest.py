@@ -37,24 +37,95 @@ def mem_db():
         conn.close()
 
 
-def cfg_fixture(tmp_path, packs=None, ignore=None, **source):
+def _toml(value):
+    """Render a Python value as TOML. ``repr`` is wrong: ``False``/``'x'``."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_toml(item) for item in value) + "]"
+    return f'"{value}"'
+
+
+def cfg_fixture(tmp_path, packs=None, ignore=None, identities=None, **source):
     """A real ``Config`` built from a throwaway ``.env`` + ``config.toml``.
 
-    A plain function, not a fixture: one test may need several configs. Secrets
-    go in the ``.env`` and settings in the TOML — the split the app enforces —
-    so this exercises the real loader instead of a stub.
+    A plain function, not a fixture: one test may need several configs (a
+    ``Config`` is a frozen dataclass with nested ``Secrets``/``Settings``, so
+    ``dataclasses.replace`` cannot reach a setting and the real loader is the
+    only honest way to change one). Secrets go in the ``.env`` and settings in
+    the TOML — the split the app enforces.
     """
     values = {"channel_id": '"c1"'}
-    values.update({k: f'"{v}"' if isinstance(v, str) else str(v) for k, v in source.items()})
+    values.update({k: _toml(v) for k, v in source.items()})
     lines = ["[source]", *(f"{k} = {v}" for k, v in values.items())]
-    if packs is not None:
+    if packs is not None or ignore is not None:
         lines.append("[stopwords]")
-        lines.append(f"packs = {[str(p) for p in packs]!r}")
-    if ignore is not None:
-        if "[stopwords]" not in lines:
-            lines.append("[stopwords]")
-        lines.append(f"ignore = {[str(w) for w in ignore]!r}")
+        if packs is not None:
+            lines.append(f"packs = {_toml(list(packs))}")
+        if ignore is not None:
+            lines.append(f"ignore = {_toml(list(ignore))}")
+    if identities:
+        lines.append("[identity]")
+        for canonical, alts in identities.items():
+            lines.append(f"{canonical} = {_toml([str(a) for a in alts])}")
     (tmp_path / "config.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
     (tmp_path / ".env").write_text("DISCORD_TOKEN=test-token\n", encoding="utf-8")
     return load_config(env_path=tmp_path / ".env", config_path=tmp_path / "config.toml")
+
+
+# The seeded conversation every rollup test is measured against. Deliberately
+# small, and deliberately awkward in the five ways the plan's Review Focus names:
+# a null `embeds`, a human with no `bot` key, a bot with one, an author known
+# only by a join event, and a display name that changed over time.
+SEED_MESSAGES = (
+    # id, author_id, author_username, content, created_at, edited_at, reply_to_id,
+    # has_attachments, type, raw author JSON
+    ("m1", "u1", "u1handle", "hi", "2026-01-01T10:00:00+00:00", None, None, 0, 0,
+     '{"id": "u1", "username": "u1handle", "global_name": "GlobalName", "embeds": null}'),
+    ("m2", "u1", "u1handle", "abc", "2026-01-01T10:01:00+00:00", None, "m1", 0, 19,
+     '{"id": "u1", "username": "u1handle", "global_name": "GlobalName"}'),
+    ("m3", "u1", "u1handle", "defghi", "2026-01-01T10:02:00+00:00", "2026-01-01T10:02:45+00:00",
+     None, 1, 0, '{"id": "u1", "username": "u1handle", "global_name": "GlobalName"}'),
+    ("m4", "u2", "plain_user", "embed here", "2026-01-02T10:00:00+00:00", None, None, 0, 0,
+     '{"id": "u2", "username": "plain_user", "global_name": "OldName", "embeds": '
+     '[{"type": "video", "provider": {"name": "YouTube"}}]}'),
+    ("m5", "u2", "plain_user", "hello there", "2026-01-02T11:00:00+00:00", None, None, 0, 0,
+     '{"id": "u2", "username": "plain_user"}'),
+    ("m6", "bot1", "botty", "beep", "2026-01-03T10:00:00+00:00", None, None, 0, 0,
+     '{"id": "bot1", "username": "botty", "bot": true}'),
+    ("m7", "u3", None, "", "2026-01-04T10:00:00+00:00", None, None, 0, 7,
+     '{"id": "u3"}'),
+)
+
+
+def seed_messages(conn, rows=SEED_MESSAGES, channel_id="c1"):
+    """Insert the fixture conversation into a ``messages`` table."""
+    for mid, author, username, content, created, edited, reply_to, attachments, msg_type, raw in rows:
+        conn.execute(
+            """
+            INSERT INTO messages (id, channel_id, author_id, author_username, content,
+                                  created_at, edited_at, reply_to_id, has_attachments,
+                                  type, pinned, raw)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+            """,
+            (mid, channel_id, author, username, content, created, edited, reply_to,
+             attachments, msg_type, '{"author": %s}' % raw),
+        )
+    conn.commit()
+
+
+@pytest.fixture
+def cfg(tmp_path):
+    """A config for the seeded channel, with the app defaults."""
+    return cfg_fixture(tmp_path)
+
+
+@pytest.fixture
+def seeded_db(mem_db):
+    """The seeded conversation in an in-memory database."""
+    seed_messages(mem_db)
+    return mem_db
+
 
