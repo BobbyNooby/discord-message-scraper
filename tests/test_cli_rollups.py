@@ -1,0 +1,110 @@
+import sqlite3
+
+from discord_scraper.cli import main
+from discord_scraper.rollups.schema import FAMILIES
+from tests.conftest import cfg_fixture
+
+
+def test_status_reports_every_family(seeded_db_path, capsys):
+    assert main(["rollups", "status", "--db", str(seeded_db_path)]) == 0
+    out = capsys.readouterr().out
+    for family in FAMILIES:
+        assert family in out
+
+
+def test_status_is_stale_before_a_rebuild_and_current_after(seeded_db_path, tmp_path, capsys):
+    config = cfg_fixture(tmp_path)
+    assert main(["rollups", "status", "--db", str(seeded_db_path)]) == 0
+    assert "stale" in capsys.readouterr().out
+
+    assert main(["rollups", "rebuild", "--db", str(seeded_db_path),
+                 "--config", str(tmp_path / "config.toml")]) == 0
+    capsys.readouterr()
+    assert main(["rollups", "status", "--db", str(seeded_db_path)]) == 0
+    out = capsys.readouterr().out
+    assert "stale" not in out
+    assert out.count("current") == len(FAMILIES)
+    assert config.channel_id == "c1"
+
+
+def test_rebuild_writes_rows_and_reports_counts(seeded_db_path, tmp_path, capsys):
+    cfg_fixture(tmp_path)
+    assert main(["rollups", "rebuild", "--db", str(seeded_db_path),
+                 "--config", str(tmp_path / "config.toml")]) == 0
+    out = capsys.readouterr().out
+    assert "activity" in out
+
+    conn = sqlite3.connect(seeded_db_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM rollup_activity").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM rollup_meta").fetchone()[0] == len(FAMILIES)
+    finally:
+        conn.close()
+
+
+def test_rebuild_accepts_an_explicit_channel(seeded_db_path, tmp_path, capsys):
+    cfg_fixture(tmp_path)
+    assert main(["rollups", "rebuild", "--db", str(seeded_db_path), "--channel", "c1",
+                 "--config", str(tmp_path / "config.toml")]) == 0
+    assert "activity" in capsys.readouterr().out
+
+
+def test_rebuild_without_a_configuration_explains_itself(seeded_db_path, tmp_path, capsys):
+    assert main(["rollups", "rebuild", "--db", str(seeded_db_path),
+                 "--config", str(tmp_path / "absent.toml")]) != 0
+    assert "config.toml" in capsys.readouterr().err
+
+
+def test_a_missing_database_exits_non_zero(tmp_path, capsys):
+    assert main(["rollups", "status", "--db", str(tmp_path / "absent.db")]) != 0
+    assert "no database" in capsys.readouterr().err.lower()
+
+
+def test_status_survives_a_database_with_no_messages(mem_db, tmp_path, capsys):
+    path = tmp_path / "empty.db"
+    conn = sqlite3.connect(path)
+    try:
+        from discord_scraper.scraper.database import SCHEMA
+
+        conn.executescript(SCHEMA)
+        conn.commit()
+    finally:
+        conn.close()
+    assert main(["rollups", "status", "--db", str(path)]) == 0
+    assert "no messages" in capsys.readouterr().out.lower()
+
+
+def test_status_notices_a_word_list_change(seeded_db_path, tmp_path, capsys):
+    """A stopword edit changes rollup_word without changing a source row."""
+    cfg_fixture(tmp_path, ignore=["aaa"])
+    config = tmp_path / "config.toml"
+    assert main(["rollups", "rebuild", "--db", str(seeded_db_path),
+                 "--config", str(config)]) == 0
+    capsys.readouterr()
+    assert main(["rollups", "status", "--db", str(seeded_db_path),
+                 "--config", str(config)]) == 0
+    assert "stale" not in capsys.readouterr().out
+
+    cfg_fixture(tmp_path, ignore=["aaa", "bbb"])
+    assert main(["rollups", "status", "--db", str(seeded_db_path),
+                 "--config", str(config)]) == 0
+    assert "stale" in capsys.readouterr().out
+
+
+def test_status_refuses_to_guess_between_channels(seeded_db_path, capsys):
+    conn = sqlite3.connect(seeded_db_path)
+    try:
+        conn.execute(
+            "INSERT INTO messages (id, channel_id, author_id, created_at, type) "
+            "VALUES ('x2', 'c2', 'u1', '2026-01-01T00:00:00+00:00', 0)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    assert main(["rollups", "status", "--db", str(seeded_db_path)]) == 0
+    assert "pass --channel" in capsys.readouterr().out
+
+
+def test_a_channel_flag_selects_the_channel(seeded_db_path, capsys):
+    assert main(["rollups", "status", "--db", str(seeded_db_path), "--channel", "other"]) == 0
+    assert "no messages" not in capsys.readouterr().out

@@ -224,6 +224,29 @@ def load_config(
     return Config(secrets=_secrets_from(env), settings=_settings_from(raw, toml_file.parent))
 
 
+def load_settings(config_path: str | Path | None = None) -> Settings:
+    """Settings only, no secrets.
+
+    A rollup rebuild reads the channel, timezone, stopword and identity settings
+    and never touches Discord, so it must not require ``DISCORD_TOKEN`` to be
+    present — demanding a credential for offline work would make the CLI
+    unusable on a machine that only reads an existing database.
+    """
+    toml_file = Path(config_path) if config_path is not None else PROJECT_DIR / "config.toml"
+    if not toml_file.exists():
+        raise SystemExit(
+            f"No config.toml at {toml_file}. Copy config.example.toml there and set "
+            "source.channel_id."
+        )
+    raw = tomllib.loads(toml_file.read_text(encoding="utf-8"))
+    return _settings_from(raw, toml_file.parent)
+
+
+def config_from_settings(settings: Settings) -> Config:
+    """A ``Config`` with no secrets, for code paths that never call Discord."""
+    return Config(secrets=Secrets(token=""), settings=settings)
+
+
 _CACHE: dict[tuple[str, str], Config] = {}
 
 

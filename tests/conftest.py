@@ -135,6 +135,19 @@ def seed_messages(conn, rows=SEED_MESSAGES, channel_id="c1"):
 
 
 @pytest.fixture
+def seeded_db_path(tmp_path):
+    """The seeded conversation in a real file — the CLI takes a path, not a handle."""
+    path = tmp_path / "messages.db"
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(SCHEMA)
+        seed_messages(conn)
+    finally:
+        conn.close()
+    return path
+
+
+@pytest.fixture
 def cfg(tmp_path):
     """A config for the seeded channel, with the app defaults."""
     return cfg_fixture(tmp_path)

@@ -300,14 +300,24 @@ def set_provenance(
     )
 
 
-def is_stale(conn: sqlite3.Connection, channel_id: str, family: str) -> bool:
-    """True when the messages table no longer matches what was recorded.
+def is_stale(
+    conn: sqlite3.Connection,
+    channel_id: str,
+    family: str,
+    *,
+    config_hash: str | None = None,
+) -> bool:
+    """True when the source or the word-list inputs no longer match the build.
 
     Count and newest id together catch both a new message and a deletion; either
-    alone misses one of them.
+    alone misses one of them. ``config_hash`` is optional because it costs a
+    stopword-file read to compute — callers that have it (the CLI's ``status``)
+    also catch "the stopword list changed, so ``rollup_word`` is out of date".
     """
     recorded = provenance(conn, channel_id, family)
     if recorded is None:
+        return True
+    if config_hash is not None and recorded["config_hash"] != config_hash:
         return True
     current_count, current_max = conn.execute(
         "SELECT COUNT(*), MAX(id) FROM messages WHERE channel_id = ?", (channel_id,)

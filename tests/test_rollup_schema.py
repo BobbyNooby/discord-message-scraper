@@ -123,3 +123,12 @@ def test_provenance_works_without_a_row_factory():
 def test_family_names_are_the_rollup_suffixes(mem_db, family):
     create_rollup_tables(mem_db)
     assert f"rollup_{family}" in _tables(mem_db)
+
+
+def test_staleness_can_consider_the_config_digest(mem_db):
+    create_rollup_tables(mem_db)
+    _insert_message(mem_db, "9")
+    set_provenance(mem_db, "c1", "word", computed_at="now", source_max_id="9",
+                   source_count=1, timezone="UTC", config_hash="h")
+    assert is_stale(mem_db, "c1", "word", config_hash="h") is False
+    assert is_stale(mem_db, "c1", "word", config_hash="h2") is True
