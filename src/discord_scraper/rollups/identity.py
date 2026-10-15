@@ -20,6 +20,7 @@ class Identities:
     names: list[str]                 # display name per row
     accounts: list[list[str]]        # every raw account folded into the row
     groups: list[tuple[str, list[str]]]   # what merging actually did
+    canonical: dict[str, str]        # every account -> its canonical id
 
 
 def latest_display_names(conn: sqlite3.Connection) -> dict[str, str]:
@@ -85,8 +86,13 @@ def _canonical(author_id: str, merge: dict[str, str]) -> str:
     return current
 
 
-def _author_counts(conn: sqlite3.Connection, cfg: Config) -> list[tuple[str, int]]:
-    """Counted messages per author: the channel's real messages, bots excluded."""
+def counted_scope(cfg: Config) -> tuple[str, list[object]]:
+    """The WHERE fragment and params selecting the messages rollups count.
+
+    One definition shared by identity and the build keeps "what counts" from
+    drifting into two answers: this channel, the configured real types, and no
+    bots.
+    """
     where = ["channel_id = ?"]
     params: list[object] = [cfg.channel_id]
     types = tuple(cfg.count_types)
@@ -97,13 +103,19 @@ def _author_counts(conn: sqlite3.Connection, cfg: Config) -> list[tuple[str, int
         # The field is absent — not false — for humans, so only `= 1` is a bot.
         where.append("(json_extract(raw, '$.author.bot') IS NULL "
                      "OR json_extract(raw, '$.author.bot') != 1)")
+    return " AND ".join(where), params
+
+
+def _author_counts(conn: sqlite3.Connection, cfg: Config) -> list[tuple[str, int]]:
+    """Counted messages per author: the channel's real messages, bots excluded."""
+    where, params = counted_scope(cfg)
     return [
         (author_id, count)
         for author_id, count in conn.execute(
             f"""
             SELECT author_id, COUNT(*) AS n
               FROM messages
-             WHERE {' AND '.join(where)}
+             WHERE {where}
              GROUP BY author_id
             """,
             params,
@@ -133,9 +145,11 @@ def resolve_identities(conn: sqlite3.Connection, cfg: Config) -> Identities:
     }
     names = [display.get(canonical) or canonical for canonical in ordered]
     accounts = [sorted(members[canonical]) for canonical in ordered]
+    canonical_of = {account: canonical for canonical in ordered for account in members[canonical]}
     groups = [
         (canonical, sorted(members[canonical]))
         for canonical in ordered
         if len(members[canonical]) > 1
     ]
-    return Identities(index=index, names=names, accounts=accounts, groups=groups)
+    return Identities(index=index, names=names, accounts=accounts, groups=groups,
+                      canonical=canonical_of)

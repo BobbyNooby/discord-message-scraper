@@ -7,6 +7,7 @@ covering ``python -m unittest`` as well, which does not read that).
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -79,29 +80,46 @@ def cfg_fixture(tmp_path, packs=None, ignore=None, identities=None, **source):
 # small, and deliberately awkward in the five ways the plan's Review Focus names:
 # a null `embeds`, a human with no `bot` key, a bot with one, an author known
 # only by a join event, and a display name that changed over time.
+def author_raw(author_id, username=None, global_name=None, bot=False, **extra):
+    """A Discord message's ``raw`` object: ``{"author": {...}, ...}``.
+
+    ``extra`` carries the top-level arrays (``embeds``, ``reactions``,
+    ``attachments``) that the rollups read, so a fixture cannot put them in the
+    wrong place — which is exactly the mistake this helper exists to prevent.
+    """
+    author = {"id": author_id}
+    if username:
+        author["username"] = username
+    if global_name:
+        author["global_name"] = global_name
+    if bot:
+        author["bot"] = True
+    return json.dumps({"author": author, **extra})
+
+
 SEED_MESSAGES = (
     # id, author_id, author_username, content, created_at, edited_at, reply_to_id,
-    # has_attachments, type, raw author JSON
+    # has_attachments, type, raw
     ("m1", "u1", "u1handle", "hi", "2026-01-01T10:00:00+00:00", None, None, 0, 0,
-     '{"id": "u1", "username": "u1handle", "global_name": "GlobalName", "embeds": null}'),
+     author_raw("u1", "u1handle", "GlobalName", embeds=None)),
     ("m2", "u1", "u1handle", "abc", "2026-01-01T10:01:00+00:00", None, "m1", 0, 19,
-     '{"id": "u1", "username": "u1handle", "global_name": "GlobalName"}'),
+     author_raw("u1", "u1handle", "GlobalName")),
     ("m3", "u1", "u1handle", "defghi", "2026-01-01T10:02:00+00:00", "2026-01-01T10:02:45+00:00",
-     None, 1, 0, '{"id": "u1", "username": "u1handle", "global_name": "GlobalName"}'),
+     None, 1, 0, author_raw("u1", "u1handle", "GlobalName")),
     ("m4", "u2", "plain_user", "embed here", "2026-01-02T10:00:00+00:00", None, None, 0, 0,
-     '{"id": "u2", "username": "plain_user", "global_name": "OldName", "embeds": '
-     '[{"type": "video", "provider": {"name": "YouTube"}}]}'),
+     author_raw("u2", "plain_user", "OldName",
+                embeds=[{"type": "video", "provider": {"name": "YouTube"}}])),
     ("m5", "u2", "plain_user", "hello there", "2026-01-02T11:00:00+00:00", None, None, 0, 0,
-     '{"id": "u2", "username": "plain_user"}'),
+     author_raw("u2", "plain_user")),
     ("m6", "bot1", "botty", "beep", "2026-01-03T10:00:00+00:00", None, None, 0, 0,
-     '{"id": "bot1", "username": "botty", "bot": true}'),
+     author_raw("bot1", "botty", bot=True)),
     ("m7", "u3", None, "", "2026-01-04T10:00:00+00:00", None, None, 0, 7,
-     '{"id": "u3"}'),
+     author_raw("u3")),
 )
 
 
 def seed_messages(conn, rows=SEED_MESSAGES, channel_id="c1"):
-    """Insert the fixture conversation into a ``messages`` table."""
+    """Insert fixture messages into a ``messages`` table."""
     for mid, author, username, content, created, edited, reply_to, attachments, msg_type, raw in rows:
         conn.execute(
             """
@@ -111,7 +129,7 @@ def seed_messages(conn, rows=SEED_MESSAGES, channel_id="c1"):
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
             """,
             (mid, channel_id, author, username, content, created, edited, reply_to,
-             attachments, msg_type, '{"author": %s}' % raw),
+             attachments, msg_type, raw),
         )
     conn.commit()
 
