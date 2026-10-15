@@ -17,6 +17,8 @@ def connect(read_only: bool = True) -> sqlite3.Connection:
     uri = f"file:{DB_PATH}?mode=ro" if read_only else f"file:{DB_PATH}"
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
+    # Readers must wait for a checkpoint rather than failing outright.
+    conn.execute("PRAGMA busy_timeout=10000")
     return conn
 
 
