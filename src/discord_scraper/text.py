@@ -24,15 +24,19 @@ _URL = re.compile(
 )
 # Custom emoji keep their name ("kek"); mentions, roles and channels are noise.
 _DISCORD = re.compile(r"<a:(\w+):\d+>|<:(\w+):\d+>|<@[!&]?\d+>|<#\d+>")
-_EMOJI = re.compile(
-    "["
+_EMOJI_RANGES = (
     "\U0001f000-\U0001faff"
     "\U00002190-\U000021ff"
     "\U00002600-\U000027bf"
     "\U0000fe00-\U0000fe0f"
     "\U00002b00-\U00002bff"
-    "]+"
 )
+# The pipeline removes a whole run at once; the emoji rollup counts each glyph,
+# so it matches one at a time and ignores the joiners and modifiers that ride
+# along with it (variation selectors, skin tones, ZWJ).
+_EMOJI = re.compile(f"[{_EMOJI_RANGES}]+")
+_ONE_EMOJI = re.compile(f"[{_EMOJI_RANGES}]")
+_EMOJI_MODIFIER = re.compile("[\ufe00-\ufe0f\U0001f3fb-\U0001f3ff\u200d]")
 _MARKDOWN = re.compile(r"[*_~|>\[\]()]+")
 _ELONGATION = re.compile(r"(.)\1{2,}")
 _TOKEN = re.compile(r"[a-z]{3,}")
@@ -67,6 +71,14 @@ def tokens(text: str) -> list[str]:
 def links(text: str) -> list[str]:
     """URLs as they appeared, in order — the raw material of link rollups."""
     return _URL.findall(text or "")
+
+
+def emoji(text: str) -> list[str]:
+    """Unicode emoji, one entry per glyph. The word pipeline drops these; the
+    emoji rollup is the only place they survive, so extraction lives beside the
+    strip rather than being re-derived there."""
+    return [glyph for glyph in _ONE_EMOJI.findall(text or "")
+            if not _EMOJI_MODIFIER.match(glyph)]
 
 
 def _read_words(path: Path) -> set[str]:

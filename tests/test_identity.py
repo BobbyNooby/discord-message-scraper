@@ -72,5 +72,5 @@ def test_authors_are_ordered_by_volume(seeded_db, cfg):
 
 def test_empty_database_yields_empty_identities(mem_db, cfg):
     ids = resolve_identities(mem_db, cfg)
-    assert ids == Identities(index={}, names=[], accounts=[], groups=[])
+    assert ids == Identities(index={}, names=[], accounts=[], groups=[], canonical={})
     assert latest_display_names(mem_db) == {}

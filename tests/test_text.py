@@ -1,6 +1,6 @@
 import pytest
 
-from discord_scraper.text import clean, links, load_stopwords, tokens
+from discord_scraper.text import clean, emoji, links, load_stopwords, tokens
 from tests.conftest import cfg_fixture
 
 
@@ -28,6 +28,12 @@ def test_links_extracts_http_www_and_bare_domains():
         "www.foo.io",
         "bar.gg/d",
     ]
+
+
+def test_emoji_extraction_keeps_what_clean_drops():
+    assert emoji("nice \U0001f600\U0001f600 work") == ["\U0001f600", "\U0001f600"]
+    assert emoji("plain text") == []
+    assert tokens("nice \U0001f600\U0001f600 work") == ["nice", "work"]
 
 
 def test_chat_filler_is_filtered_but_topics_are_not(tmp_path):
