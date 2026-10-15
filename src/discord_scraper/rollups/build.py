@@ -167,15 +167,23 @@ def _name_tokens(conn: sqlite3.Connection) -> set[str]:
 
 
 def config_digest(cfg: Config) -> str:
-    """Fingerprint of the word-list inputs, so a config edit is detectable.
+    """Fingerprint of every setting a rebuild reads.
 
-    Public because the CLI's `status` compares it: a stopword edit changes what
-    `rollup_word` should contain without changing a single source row, so the
-    message fingerprint alone would report "current" (§5.2 stores this to make
-    that comparison possible).
+    Public because `status` compares it: an edit to the stopword list, the
+    timezone, the counted types, the bot rule or the identity map changes what
+    the rollups *should* contain without adding a single source row, so the
+    message fingerprint alone would report "current" while the tables are stale
+    (§5.2 stores this column to make that comparison possible).
     """
-    parts = [",".join(sorted(cfg.stopword_packs)), ",".join(sorted(cfg.ignore_words))]
-    parts.append(",".join(sorted(load_stopwords(cfg))))
+    parts = [
+        ",".join(sorted(cfg.stopword_packs)),
+        ",".join(sorted(cfg.ignore_words)),
+        ",".join(sorted(load_stopwords(cfg))),
+        str(cfg.timezone),
+        ",".join(str(t) for t in cfg.count_types),
+        str(bool(cfg.exclude_bots)),
+        ";".join(f"{k}:{','.join(sorted(v))}" for k, v in sorted((cfg.identities or {}).items())),
+    ]
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:32]
 
 
