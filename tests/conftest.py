@@ -237,6 +237,22 @@ def client_unauthenticated(db_cfg, conn):
 
 
 @pytest.fixture
+def viewer_client(client_for):
+    """A signed-in viewer — what every read endpoint expects."""
+    from discord_scraper.auth.session import Level
+
+    return client_for(Level.VIEWER)
+
+
+@pytest.fixture
+def admin_client(client_for):
+    """A signed-in admin — the only level that may see the admin surface."""
+    from discord_scraper.auth.session import Level
+
+    return client_for(Level.ADMIN)
+
+
+@pytest.fixture
 def cfg(tmp_path):
     """A config for the seeded channel, with the app defaults."""
     return cfg_fixture(tmp_path)
