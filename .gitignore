@@ -2,3 +2,8 @@
 output/
 __pycache__/
 .DS_Store
+
+# local working material: design mockup, spec, brainstorm sessions.
+# contains real handles and real aggregate data - never commit.
+docs/
+.superpowers/
