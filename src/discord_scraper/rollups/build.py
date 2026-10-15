@@ -25,7 +25,12 @@ from urllib.parse import urlsplit
 
 from discord_scraper.config import Config
 from discord_scraper.rollups.identity import Identities, counted_scope, latest_display_names, resolve_identities
-from discord_scraper.rollups.schema import FAMILIES, create_rollup_tables, set_provenance
+from discord_scraper.rollups.schema import (
+    FAMILIES,
+    create_control_tables,
+    create_rollup_tables,
+    set_provenance,
+)
 from discord_scraper.text import emoji, links, load_stopwords, tokens
 from discord_scraper.timeutil import local_parts
 
@@ -42,21 +47,28 @@ _UNKNOWN = "unknown"
 _UNPROVIDENCED = "unprovidenced"
 
 _COLUMNS = (
-    "id, author_id, content, created_at, edited_at, reply_to_id, has_attachments, type, raw"
+    "id", "author_id", "content", "created_at", "edited_at", "reply_to_id",
+    "has_attachments", "type", "raw",
 )
 
 
-def _messages(conn: sqlite3.Connection, cfg: Config, *, all_types: bool = False) -> list[sqlite3.Row]:
-    """The counted messages, oldest first.
+def _messages(conn: sqlite3.Connection, cfg: Config, *, all_types: bool = False) -> list[dict]:
+    """The counted messages, oldest first, as plain dicts.
+
+    Dicts rather than ``sqlite3.Row``: this module must not care whether its
+    caller set a row factory — the CLI, the worker and the tests each open their
+    own connection, and a rebuild that only works under one of them is a trap.
 
     ``all_types`` ignores ``source.count_types`` and the bot rule — only the
     message-type breakdown wants every row, because a type distribution that
     shows two of Discord's dozen types answers nothing.
     """
     where, params = counted_scope(cfg) if not all_types else ("channel_id = ?", [cfg.channel_id])
-    return conn.execute(
-        f"SELECT {_COLUMNS} FROM messages WHERE {where} ORDER BY created_at, id", params
+    found = conn.execute(
+        f"SELECT {', '.join(_COLUMNS)} FROM messages WHERE {where} ORDER BY created_at, id",
+        params,
     ).fetchall()
+    return [dict(zip(_COLUMNS, row)) for row in found]
 
 
 def _table_for(family: str) -> str:
@@ -96,7 +108,7 @@ def _raw_field(raw: str | None, field: str) -> list[dict[str, Any]]:
     return value if isinstance(value, list) else []
 
 
-def _has_media(row: sqlite3.Row) -> bool:
+def _has_media(row: dict) -> bool:
     """Attachment OR embed (spec §5.10).
 
     The ``json_type`` guard is not optional: ``json_array_length`` raises on a
@@ -414,6 +426,35 @@ def _parent_index(conn: sqlite3.Connection, cfg: Config) -> dict[str, tuple[str,
 REBUILDER_NAMES: dict[str, str] = {family: f"rebuild_{family}" for family in FAMILIES}
 
 
+def store_author_names(conn: sqlite3.Connection, cfg: Config, ids: Identities) -> None:
+    """Remember each author's current display name.
+
+    Refreshed on every rebuild, but never over a name an admin chose: ``renamed``
+    is the difference between "Discord renamed them" and "we were told what to
+    call them" (spec §5.5 keeps a rename cosmetic, so a rebuild must not undo it).
+    """
+    display = latest_display_names(conn)
+    rows = []
+    for accounts in ids.accounts:
+        if not accounts:
+            continue
+        # Every account in a row maps to the same canonical, which is right even
+        # when the canonical account itself never posted.
+        canonical = ids.canonical[accounts[0]]
+        rows.append((cfg.channel_id, canonical, display.get(canonical) or canonical))
+    conn.execute("DELETE FROM author_names WHERE channel_id = ? AND renamed = 0",
+                 (cfg.channel_id,))
+    conn.executemany(
+        """
+        INSERT INTO author_names (channel_id, author_id, name, renamed)
+        VALUES (?, ?, ?, 0)
+        ON CONFLICT (channel_id, author_id) DO UPDATE SET name = excluded.name
+         WHERE author_names.renamed = 0
+        """,
+        rows,
+    )
+
+
 def rebuild_all(conn: sqlite3.Connection, cfg: Config, *, now: str | None = None) -> dict[str, int]:
     """Rebuild every family for this channel inside one transaction.
 
@@ -421,6 +462,7 @@ def rebuild_all(conn: sqlite3.Connection, cfg: Config, *, now: str | None = None
     and the previous provenance exactly as they were.
     """
     create_rollup_tables(conn)
+    create_control_tables(conn)   # author_names lives with the control plane
     ids = resolve_identities(conn, cfg)
     stamp = now or datetime.now().astimezone().isoformat(timespec="seconds")
     config_hash = config_digest(cfg)
@@ -439,6 +481,7 @@ def rebuild_all(conn: sqlite3.Connection, cfg: Config, *, now: str | None = None
     # transaction (a job runner, a test), where a nested BEGIN raises.
     conn.execute("SAVEPOINT rollup_rebuild")
     try:
+        store_author_names(conn, cfg, ids)
         for family in FAMILIES:
             counts[family] = globals()[REBUILDER_NAMES[family]](conn, cfg, ids)
             set_provenance(

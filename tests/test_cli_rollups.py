@@ -108,3 +108,17 @@ def test_status_refuses_to_guess_between_channels(seeded_db_path, capsys):
 def test_a_channel_flag_selects_the_channel(seeded_db_path, capsys):
     assert main(["rollups", "status", "--db", str(seeded_db_path), "--channel", "other"]) == 0
     assert "no messages" not in capsys.readouterr().out
+
+
+def test_serve_refuses_a_missing_database_without_binding_a_port(tmp_path, capsys):
+    assert main(["serve", "--db", str(tmp_path / "absent.db")]) == 2
+    assert "no database" in capsys.readouterr().err.lower()
+
+
+def test_serve_accepts_host_and_port(tmp_path, capsys):
+    from discord_scraper.cli import build_parser
+
+    parsed = build_parser().parse_args(
+        ["serve", "--db", str(tmp_path / "x.db"), "--host", "0.0.0.0", "--port", "9001"]
+    )
+    assert (parsed.host, parsed.port) == ("0.0.0.0", 9001)

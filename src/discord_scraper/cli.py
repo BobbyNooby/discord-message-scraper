@@ -43,7 +43,11 @@ def build_parser() -> argparse.ArgumentParser:
     for action in (rebuild, status):
         action.add_argument("--config", default=None,
                             help="config.toml to compare against (default: the checkout's)")
-    sub.add_parser("serve", help="run the web API and the ingest worker")
+    serve = sub.add_parser("serve", help="run the web API (and, later, the ingest worker)")
+    serve.add_argument("--db", default=None, help="path to messages.db (default: output/)")
+    serve.add_argument("--config", default=None, help="path to config.toml")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8000)
 
     return parser
 
@@ -74,8 +78,7 @@ def main(argv: list[str] | None = None) -> int:
         return _rollups(args)
 
     if args.command == "serve":
-        print("'serve' is not implemented yet.", file=sys.stderr)
-        return 2
+        return _serve(args)
 
     parser.print_help()
     return 0
@@ -208,4 +211,30 @@ def _rollups(args) -> int:
     if args.rollup_command == "status":
         return _rollups_status(args)
     build_parser().parse_args(["rollups", "--help"])
+    return 0
+
+
+def _serve(args) -> int:
+    """Run the API. The ingest worker joins it in Task 12."""
+    from pathlib import Path
+
+    from discord_scraper.config import PROJECT_DIR, load_config
+    from discord_scraper.scraper.config import DB_PATH
+
+    database = Path(args.db) if args.db else DB_PATH
+    if not database.exists():
+        print(f"no database at {database}", file=sys.stderr)
+        return 2
+    config_path = Path(args.config) if args.config else PROJECT_DIR / "config.toml"
+    try:
+        cfg = load_config(config_path=config_path)
+    except SystemExit as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    import uvicorn
+
+    from discord_scraper.api.app import create_app
+
+    uvicorn.run(create_app(cfg, database), host=args.host, port=args.port)
     return 0
