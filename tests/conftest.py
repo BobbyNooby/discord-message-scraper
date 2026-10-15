@@ -7,14 +7,34 @@ covering ``python -m unittest`` as well, which does not read that).
 
 from __future__ import annotations
 
+import sqlite3
 import sys
 from pathlib import Path
+
+import pytest
 
 SRC = Path(__file__).resolve().parent.parent / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from discord_scraper.config import load_config  # noqa: E402  (SRC first, above)
+from discord_scraper.scraper.database import SCHEMA  # noqa: E402  (SRC first, above)
+
+
+@pytest.fixture
+def mem_db():
+    """An in-memory database carrying the real ``messages`` schema.
+
+    The rollups read the production table, so a stub schema would let a query
+    pass here and fail against the 740 MB original.
+    """
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(SCHEMA)
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def cfg_fixture(tmp_path, packs=None, ignore=None, **source):
