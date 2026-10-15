@@ -15,7 +15,7 @@ from typing import Callable
 from discord_scraper.config import Config
 from discord_scraper.worker.jobs import enqueue, run_pending
 from discord_scraper.worker.scheduler import schedule_enabled, next_delay_seconds
-from discord_scraper.worker.state import record_worker_seen, worker_state
+from discord_scraper.worker.state import record_worker_seen, set_worker_state, worker_state
 
 POLL_SECONDS = 15
 
@@ -51,7 +51,22 @@ def run_forever(
             last = worker_state(conn, "last_ingest_at")
             if _hours_since(last) >= next_delay_seconds(conn) / 3600:
                 enqueue(conn, cfg.channel_id, "catch_up")
-        run_pending(conn, cfg)
+        try:
+            ran = run_pending(conn, cfg)
+        except Exception as exc:
+            # A job failure must not end ingest for the life of the process. A
+            # dead token makes `fetch_messages` raise, and `run_pending`
+            # re-raises by design; without this catch the daemon thread dies and
+            # every later job — including a manual Recalculate — sits queued
+            # until someone restarts the server (spec §10.1, §10.7).
+            failures = int(worker_state(conn, "consecutive_failures") or 0) + 1
+            set_worker_state(conn, "consecutive_failures", failures)
+            set_worker_state(conn, "last_error", f"{type(exc).__name__}: {exc}")
+        else:
+            # Cleared by a job that *ran*, not by an idle pass: an empty queue
+            # is not evidence that the token works again.
+            if ran and (worker_state(conn, "consecutive_failures") or "0") != "0":
+                set_worker_state(conn, "consecutive_failures", 0)
         passes += 1
         if iterations is None or passes < iterations:
             sleep(poll_seconds)
