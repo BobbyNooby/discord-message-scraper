@@ -232,3 +232,77 @@ UPDATE messages
 SET sticker_count = json_array_length(raw, '$.sticker_items')
 WHERE json_extract(raw, '$.sticker_items') IS NOT NULL;
 ```
+
+## The stats site (backend)
+
+The repository now also contains the backend for a read-only stats site: the
+same scrape, plus precomputed rollup tables and an authenticated API that serves
+them. Nothing in this section is needed to scrape or to use the analysis CLI.
+
+### Install
+
+```bash
+python3 -m venv .venv && . .venv/bin/activate
+pip install -e ".[web]"          # the base install needs no dependencies at all
+```
+
+Tier 1 — `discord-scraper scrape`, `discord-scraper analyze` — speaks HTTP with
+`urllib` and imports nothing outside the standard library. The `web` extra adds
+FastAPI, uvicorn, httpx, itsdangerous and APScheduler for the API and worker.
+
+### Configure
+
+Two files, one rule: **a secret is an environment variable, anything a fork
+might change is a config value.**
+
+| Where | What |
+|---|---|
+| `.env` (gitignored) | `DISCORD_TOKEN`, `DISCORD_CLIENT_SECRET`, `SESSION_SECRET`, `ADMIN_DISCORD_ID` |
+| `config.toml` (gitignored; copy `config.example.toml`) | channel id, timezone, bot rule, stopword packs, identity merges, OAuth client id and redirect URI |
+| `stopwords.d/` | your own `*.txt` lists, one word per line, merged last |
+
+`config.toml` is gitignored because it holds the channel id, which identifies a
+private conversation. Defaults are deliberately neutral: timezone `UTC`, no
+regional stopword packs, product name "Discord Scraper".
+
+### Run
+
+```bash
+discord-scraper scrape                 # or: python3 main.py
+discord-scraper analyze stats          # or: python3 -m analysis stats
+discord-scraper rollups rebuild        # build every rollup family
+discord-scraper rollups status         # row counts and current/stale per family
+discord-scraper serve                  # API + ingest worker on 127.0.0.1:8000
+```
+
+The API reads rollup tables only, never `messages`: a request never aggregates
+and never touches the raw JSON. That means **rollups must be built before the
+site has anything to show**, and `rollups status` is how you check.
+
+### API
+
+| Endpoint | Who | Returns |
+|---|---|---|
+| `GET /api/health` | anyone | liveness plus the banner state (`null`, `stale`, `token_dead`) |
+| `GET /api/bootstrap` | viewer | the whole dashboard payload in one request |
+| `GET /api/words?q=` | viewer | search across the full word index |
+| `GET /api/admin/status` | admin | rollup counts, staleness, worker health, job counts |
+| `GET /api/admin/config` · `PUT` | admin | operator overrides (timezone, ignore list, allowlist policy) |
+| `GET|POST /api/admin/jobs` | admin | the job queue |
+| `POST /api/admin/recalculate` | admin | queue a full rollup rebuild |
+| `GET /api/admin/search?q=` | admin | message text — the one endpoint that returns it |
+
+Login is Discord OAuth, scope `identify` only. A viewer is the admin id, an
+explicitly allowed id, or somebody who has posted; an admin is `ADMIN_DISCORD_ID`.
+Sessions are rows, stored hashed, so they are revocable.
+
+### How the aggregates are laid out
+
+Fourteen rollup families, each keyed by `channel_id` first and by a grain rather
+than by a panel, so one table feeds many charts. Every rebuild is full and
+inside one transaction, and `rollup_meta` records what it was built from
+(`computed_at`, `source_count`, `source_max_message_id`, `timezone`,
+`config_hash`) — which is what makes "is this stale?" a query rather than a
+guess. Changing the timezone, merging identities, or editing the stopword list
+invalidates every aggregate, so `rollups status` will say `stale` until you
+rebuild.
