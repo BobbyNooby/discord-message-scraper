@@ -7,7 +7,7 @@ from collections import Counter
 from pathlib import Path
 
 from .db import REAL_MESSAGES, connect
-from scraper.config import OUTPUT_DIR
+from discord_scraper.scraper.config import OUTPUT_DIR
 
 WORD_RE = re.compile(r"[a-zA-Z']+")
 BUCKET_FMTS = {"year": "%Y", "month": "%Y-%m", "day": "%Y-%m-%d"}

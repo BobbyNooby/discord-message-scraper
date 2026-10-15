@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "discord-scraper"
+version = "0.1.0"
+description = "Scrape a Discord channel into SQLite, then analyse and chart it."
+readme = "README.md"
+requires-python = ">=3.11"
+# Tier 1 is deliberately dependency-free: the scraper speaks HTTP with urllib
+# from the standard library. Everything web-related lives in the extra below.
+dependencies = []
+
+[project.optional-dependencies]
+web = ["fastapi", "uvicorn[standard]", "httpx", "itsdangerous", "apscheduler"]
+dev = ["pytest"]
+
+[project.scripts]
+discord-scraper = "discord_scraper.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+discord_scraper = ["data/*.txt"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

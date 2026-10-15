@@ -6,7 +6,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from scraper.config import DB_PATH
+from discord_scraper.scraper.config import DB_PATH
 
 REAL_MESSAGES = "type IN (0, 19)"  # excludes calls, joins, pin notices, ...
 

@@ -3,7 +3,7 @@
 The HTTP boundary (`fetch_messages`) is the only thing faked; the SQLite
 layer is real. Run with:
 
-    python3 -m unittest discover -s tests -t .
+    python3 -m pytest tests/
 """
 
 from __future__ import annotations
@@ -16,9 +16,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import main
-from scraper import database
-from scraper.config import Config
+from discord_scraper import pipeline as main
+from discord_scraper.scraper import database
+from discord_scraper.scraper.config import Config
 
 
 def message(i: int) -> dict:

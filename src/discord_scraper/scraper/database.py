@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import sqlite3
 
-from scraper.config import DB_PATH, OUTPUT_DIR
-from scraper.transform import to_row
+from discord_scraper.scraper.config import DB_PATH, OUTPUT_DIR
+from discord_scraper.scraper.transform import to_row
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (

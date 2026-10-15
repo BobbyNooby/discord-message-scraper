@@ -15,7 +15,27 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 )
 
-PROJECT_DIR = Path(__file__).resolve().parent.parent
+def resolve_home(env: dict | None = None) -> Path:
+    """The checkout root — deliberately not the package directory.
+
+    This module now lives at ``<root>/src/discord_scraper/scraper/config.py``,
+    so counting parents from ``__file__`` would put ``output/`` inside the
+    package and orphan an existing database. ``DISCORD_SCRAPER_HOME`` wins;
+    otherwise walk up for ``pyproject.toml``; otherwise fall back to the
+    current working directory.
+    """
+    env = os.environ if env is None else env
+    override = env.get("DISCORD_SCRAPER_HOME")
+    if override:
+        return Path(override).expanduser().resolve()
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "pyproject.toml").is_file():
+            return parent
+    return Path.cwd()
+
+
+PROJECT_DIR = resolve_home()
 ENV_PATH = PROJECT_DIR / ".env"
 OUTPUT_DIR = PROJECT_DIR / "output"
 DB_PATH = OUTPUT_DIR / "messages.db"

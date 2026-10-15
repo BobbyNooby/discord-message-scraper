@@ -8,7 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from scraper.config import API_BASE, BATCH_SIZE, USER_AGENT
+from discord_scraper.scraper.config import API_BASE, BATCH_SIZE, USER_AGENT
 
 
 def fetch_messages(token: str, channel_id: str, before: str | None, limit: int = BATCH_SIZE) -> list[dict]:

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import queries
 from .db import REAL_MESSAGES
-from scraper.config import DB_PATH
+from discord_scraper.scraper.config import DB_PATH
 
 
 class MessageDB:

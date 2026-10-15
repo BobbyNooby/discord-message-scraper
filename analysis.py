@@ -1,16 +1,21 @@
-"""Runs the default analysis: words + messages pie & timeline charts plus a
-text dump of the numbers behind them into output/report/.
+"""Compatibility entry point for the default analysis report.
 
-    python3 analysis.py
+The implementation lives in ``src/discord_scraper/analysis/``. This shim puts
+``src/`` on the import path so ``python3 analysis.py`` keeps working with no
+install step. The full CLI is:
 
-Full CLI (stats, activity, search, ...) lives in the package:
-
-    python3 -m analysis stats
-    python3 -m analysis activity --by month
-    python3 -m analysis search "hello"
+    discord-scraper analyze stats
+    discord-scraper analyze activity --by month
 """
 
-from analysis import report
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+
+from discord_scraper.analysis import report  # noqa: E402
 
 if __name__ == "__main__":
     report()

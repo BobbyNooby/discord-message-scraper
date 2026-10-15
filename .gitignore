@@ -7,3 +7,5 @@ __pycache__/
 # contains real handles and real aggregate data - never commit.
 docs/
 .superpowers/
+.venv/
+*.egg-info/
