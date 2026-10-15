@@ -240,3 +240,51 @@ def test_a_disabled_schedule_queues_nothing(two_conns, cfg, monkeypatch):
     monkeypatch.setitem(loop.__dict__, "run_pending", lambda conn, cfg: 0)
     loop.run_forever(conn, cfg, iterations=1, sleep=lambda _s: None)
     assert other.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
+
+
+def test_the_loop_survives_a_failing_job(two_conns, cfg, monkeypatch):
+    """A dead token must not end ingest for the life of the process.
+
+    `run_pending` re-raises by design; the loop is what must not die. Before the
+    fix, the exception left the daemon thread and every later job — including the
+    operator's manual Recalculate — sat queued until a restart.
+    """
+    from discord_scraper.worker import jobs as jobs_module
+    from discord_scraper.worker import loop
+
+    def boom(*a, **k):
+        raise RuntimeError("HTTP 401/403: token invalid or channel not accessible")
+
+    monkeypatch.setitem(jobs_module.DISPATCH, "catch_up", boom)
+    monkeypatch.setattr(loop, "schedule_enabled", lambda conn: False)
+
+    conn, other = two_conns
+    enqueue(conn, "c1", "catch_up")
+    enqueue(conn, "c1", "rebuild_rollups")
+
+    assert loop.run_forever(conn, cfg, iterations=2, sleep=lambda _s: None) == 2
+
+    statuses = dict(other.execute("SELECT status, COUNT(*) FROM jobs GROUP BY status"))
+    assert statuses.get("failed") == 1
+    assert statuses.get("done") == 1          # the queue kept moving
+    assert "401" in (worker_state(other, "last_error") or "")
+    # A later success clears the counter: it counts *consecutive* failures.
+    assert worker_state(other, "consecutive_failures") == "0"
+
+
+def test_the_failure_counter_survives_a_pass_with_nothing_to_do(two_conns, cfg, monkeypatch):
+    from discord_scraper.worker import jobs as jobs_module
+    from discord_scraper.worker import loop
+
+    def boom(*a, **k):
+        raise RuntimeError("still the same dead token")
+
+    monkeypatch.setitem(jobs_module.DISPATCH, "catch_up", boom)
+    monkeypatch.setattr(loop, "schedule_enabled", lambda conn: False)
+
+    conn, other = two_conns
+    enqueue(conn, "c1", "catch_up")
+    loop.run_forever(conn, cfg, iterations=2, sleep=lambda _s: None)
+
+    assert worker_state(other, "consecutive_failures") == "1"
+    assert "dead token" in (worker_state(other, "last_error") or "")
