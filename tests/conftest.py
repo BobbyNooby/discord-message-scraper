@@ -49,7 +49,8 @@ def _toml(value):
     return f'"{value}"'
 
 
-def cfg_fixture(tmp_path, packs=None, ignore=None, identities=None, **source):
+def cfg_fixture(tmp_path, packs=None, ignore=None, identities=None, admin_id=None,
+                access=None, **source):
     """A real ``Config`` built from a throwaway ``.env`` + ``config.toml``.
 
     A plain function, not a fixture: one test may need several configs (a
@@ -67,12 +68,19 @@ def cfg_fixture(tmp_path, packs=None, ignore=None, identities=None, **source):
             lines.append(f"packs = {_toml(list(packs))}")
         if ignore is not None:
             lines.append(f"ignore = {_toml(list(ignore))}")
+    if access:
+        lines.append("[access]")
+        for key, value in access.items():
+            lines.append(f"{key} = {_toml(value)}")
     if identities:
         lines.append("[identity]")
         for canonical, alts in identities.items():
             lines.append(f"{canonical} = {_toml([str(a) for a in alts])}")
     (tmp_path / "config.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
-    (tmp_path / ".env").write_text("DISCORD_TOKEN=test-token\n", encoding="utf-8")
+    env_lines = ["DISCORD_TOKEN=test-token"]
+    if admin_id:
+        env_lines.append(f"ADMIN_DISCORD_ID={admin_id}")
+    (tmp_path / ".env").write_text("\n".join(env_lines) + "\n", encoding="utf-8")
     return load_config(env_path=tmp_path / ".env", config_path=tmp_path / "config.toml")
 
 
@@ -148,24 +156,80 @@ def seeded_db_path(tmp_path):
 
 
 @pytest.fixture
-def client(seeded_db_path, tmp_path):
-    """An HTTP client over a seeded, **rebuilt** database.
+def conn(seeded_db_path):
+    """A **writable** handle with the control plane created.
 
-    The rollups are built here because the API reads them and never builds them:
-    a server that computed on request would be the design this project rejected.
+    Sessions, jobs and worker state are rows, so the tests that exercise them
+    need a connection that can write — the API itself reads through a read-only
+    handle (see ``api.deps``).
     """
+    from discord_scraper.rollups.schema import create_control_tables, create_rollup_tables
+
+    connection = sqlite3.connect(seeded_db_path)
+    connection.row_factory = sqlite3.Row
+    create_rollup_tables(connection)
+    create_control_tables(connection)
+    connection.commit()
+    try:
+        yield connection
+    finally:
+        connection.close()
+
+
+@pytest.fixture
+def db_cfg(seeded_db_path, tmp_path):
+    """``(config, path)`` for a seeded database with its rollups built.
+
+    Built here because the API reads rollups and never builds them: a server
+    that computed on request would be the design this project rejected.
+    """
+    from discord_scraper.rollups.build import rebuild_all
+
+    cfg = cfg_fixture(tmp_path, access={
+        "client_id": "test-client",
+        "redirect_uri": "https://stats.example/auth/callback",
+    })
+    connection = sqlite3.connect(seeded_db_path)
+    try:
+        rebuild_all(connection, cfg)
+    finally:
+        connection.close()
+    return cfg, seeded_db_path
+
+
+def _client_for(db_cfg, conn, level):
     from fastapi.testclient import TestClient
 
     from discord_scraper.api.app import create_app
-    from discord_scraper.rollups.build import rebuild_all
+    from discord_scraper.auth.session import SESSION_COOKIE, establish_session
 
-    cfg = cfg_fixture(tmp_path)
-    conn = sqlite3.connect(seeded_db_path)
-    try:
-        rebuild_all(conn, cfg)
-    finally:
-        conn.close()
-    return TestClient(create_app(cfg, seeded_db_path))
+    cfg, path = db_cfg
+    client = TestClient(create_app(cfg, path))
+    if level is not None:
+        client.cookies.set(SESSION_COOKIE, establish_session(conn, "u1", level))
+    return client
+
+
+@pytest.fixture
+def client_for(db_cfg, conn):
+    """A client holding a session at the requested level (``None`` = anonymous)."""
+    def build(level):
+        return _client_for(db_cfg, conn, level)
+
+    return build
+
+
+@pytest.fixture
+def client(db_cfg, conn):
+    """An authenticated client — the viewer every read endpoint expects."""
+    from discord_scraper.auth.session import Level
+
+    return _client_for(db_cfg, conn, Level.VIEWER)
+
+
+@pytest.fixture
+def client_unauthenticated(db_cfg, conn):
+    return _client_for(db_cfg, conn, None)
 
 
 @pytest.fixture
