@@ -37,8 +37,9 @@ ignore = []
 
 [identity]
 # Fold alt accounts into one person, so their statistics do not split.
-# The admin board edits this too.
-# joyt = ["joyt2"]
+# The admin board edits this too. Use placeholders here — the real pair
+# identifies two accounts in one specific chat.
+# alice = ["alice_alt"]
 
 [worker]
 cron_enabled = true
