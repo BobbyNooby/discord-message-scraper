@@ -1,5 +1,7 @@
 import sqlite3
 
+import pytest
+
 from discord_scraper.cli import main
 from discord_scraper.rollups.schema import FAMILIES
 from tests.conftest import cfg_fixture
@@ -124,8 +126,34 @@ def test_serve_accepts_host_and_port(tmp_path, capsys):
     assert (parsed.host, parsed.port) == ("0.0.0.0", 9001)
 
 
-def test_serve_can_run_without_the_worker(tmp_path):
+def test_serve_has_three_shapes(tmp_path):
     from discord_scraper.cli import build_parser
 
-    parsed = build_parser().parse_args(["serve", "--db", str(tmp_path / "x.db"), "--no-worker"])
-    assert parsed.no_worker is True
+    parser = build_parser()
+    assert parser.parse_args(["serve", "--db", "x.db"]).api is False
+    assert parser.parse_args(["serve", "--db", "x.db", "--api"]).api is True
+    assert parser.parse_args(["serve", "--db", "x.db", "--worker"]).worker is True
+    with pytest.raises(SystemExit):
+        parser.parse_args(["serve", "--db", "x.db", "--api", "--worker"])
+
+
+def test_an_unbuilt_spa_is_a_hint_not_a_crash(tmp_path, monkeypatch, capsys):
+    from discord_scraper.api.deps import connect_writable
+    from discord_scraper.cli import main
+    from discord_scraper.rollups.schema import create_control_tables
+
+    database = tmp_path / "messages.db"
+    conn = connect_writable(database)
+    create_control_tables(conn)
+    conn.close()
+    from tests.conftest import cfg_fixture
+
+    cfg_fixture(tmp_path)
+    seen = {}
+    import uvicorn
+
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: seen.update(app=app, **kw))
+    assert main(["serve", "--db", str(database), "--config", str(tmp_path / "config.toml"),
+                 "--api", "--port", "8099"]) == 0
+    assert "no built SPA" in capsys.readouterr().err
+    assert seen["port"] == 8099

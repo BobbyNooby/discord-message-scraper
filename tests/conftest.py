@@ -50,7 +50,7 @@ def _toml(value):
 
 
 def cfg_fixture(tmp_path, packs=None, ignore=None, identities=None, admin_id=None,
-                access=None, **source):
+                access=None, ui=None, **source):
     """A real ``Config`` built from a throwaway ``.env`` + ``config.toml``.
 
     A plain function, not a fixture: one test may need several configs (a
@@ -71,6 +71,10 @@ def cfg_fixture(tmp_path, packs=None, ignore=None, identities=None, admin_id=Non
     if access:
         lines.append("[access]")
         for key, value in access.items():
+            lines.append(f"{key} = {_toml(value)}")
+    if ui:
+        lines.append("[ui]")
+        for key, value in ui.items():
             lines.append(f"{key} = {_toml(value)}")
     if identities:
         lines.append("[identity]")

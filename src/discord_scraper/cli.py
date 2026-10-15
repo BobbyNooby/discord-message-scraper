@@ -48,8 +48,15 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--config", default=None, help="path to config.toml")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
-    serve.add_argument("--no-worker", action="store_true",
-                       help="serve the API only; run the ingest worker elsewhere")
+    shape = serve.add_mutually_exclusive_group()
+    shape.add_argument("--all", action="store_true",
+                       help="API + ingest worker in one process (default)")
+    shape.add_argument("--api", action="store_true",
+                       help="HTTP only; run the worker elsewhere (no Discord token needed here)")
+    shape.add_argument("--worker", action="store_true",
+                       help="ingest only; serves no HTTP (keep the token off the web host)")
+    serve.add_argument("--static-dir", default=None,
+                       help="path to the built SPA (default: web/dist)")
 
     return parser
 
@@ -239,18 +246,39 @@ def _serve(args) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
+    if args.worker:
+        # No HTTP at all: the split exists so the Discord token can live on a
+        # machine that serves nothing (spec §4.6).
+        from discord_scraper.api.deps import connect_writable
+        from discord_scraper.worker.loop import run_forever
+
+        conn = connect_writable(database)
+        try:
+            run_forever(conn, cfg)
+        finally:
+            conn.close()
+        return 0
+
     import threading
 
     import uvicorn
 
     from discord_scraper.api.app import create_app
 
-    if not args.no_worker:
+    static = Path(args.static_dir) if args.static_dir else PROJECT_DIR / "web" / "dist"
+    if not (static / "index.html").is_file():
+        print(
+            f"no built SPA at {static} — serving the API only (build it with: cd web && pnpm build)",
+            file=sys.stderr,
+        )
+        static = None
+
+    if not args.api:
         threading.Thread(
             target=_worker_thread, args=(cfg, database), daemon=True, name="ingest-worker"
         ).start()
 
-    uvicorn.run(create_app(cfg, database), host=args.host, port=args.port)
+    uvicorn.run(create_app(cfg, database, static_dir=static), host=args.host, port=args.port)
     return 0
 
 
