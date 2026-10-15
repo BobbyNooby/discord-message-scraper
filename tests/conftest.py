@@ -148,6 +148,27 @@ def seeded_db_path(tmp_path):
 
 
 @pytest.fixture
+def client(seeded_db_path, tmp_path):
+    """An HTTP client over a seeded, **rebuilt** database.
+
+    The rollups are built here because the API reads them and never builds them:
+    a server that computed on request would be the design this project rejected.
+    """
+    from fastapi.testclient import TestClient
+
+    from discord_scraper.api.app import create_app
+    from discord_scraper.rollups.build import rebuild_all
+
+    cfg = cfg_fixture(tmp_path)
+    conn = sqlite3.connect(seeded_db_path)
+    try:
+        rebuild_all(conn, cfg)
+    finally:
+        conn.close()
+    return TestClient(create_app(cfg, seeded_db_path))
+
+
+@pytest.fixture
 def cfg(tmp_path):
     """A config for the seeded channel, with the app defaults."""
     return cfg_fixture(tmp_path)

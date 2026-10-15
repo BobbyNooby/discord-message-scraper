@@ -171,6 +171,7 @@ CREATE TABLE IF NOT EXISTS rollup_meta (
 
 CONTROL_TABLES: tuple[str, ...] = (
     "jobs",
+    "author_names",
     "sessions",
     "viewers",
     "login_attempts",
@@ -223,6 +224,17 @@ CREATE TABLE IF NOT EXISTS worker_state (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
   updated_at TEXT NOT NULL
+);
+
+-- Display names, so the API can name an author without scanning `messages`
+-- (spec §5.3) and so an admin rename survives a rebuild (§5.5). `renamed` marks
+-- a human's choice, which a rebuild must not overwrite.
+CREATE TABLE IF NOT EXISTS author_names (
+  channel_id TEXT NOT NULL,
+  author_id  TEXT NOT NULL,
+  name       TEXT NOT NULL,
+  renamed    INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (channel_id, author_id)
 );
 
 -- Merging happens before aggregation, so no rollup needs to know identity exists.
