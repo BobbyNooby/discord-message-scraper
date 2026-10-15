@@ -10,3 +10,8 @@ docs/
 .venv/
 *.egg-info/
 config.toml
+
+# frontend build output and dependencies: generated, never committed
+web/node_modules/
+web/dist/
+*.tsbuildinfo
