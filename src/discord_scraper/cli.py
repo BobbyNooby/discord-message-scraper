@@ -48,6 +48,8 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--config", default=None, help="path to config.toml")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("--no-worker", action="store_true",
+                       help="serve the API only; run the ingest worker elsewhere")
 
     return parser
 
@@ -215,7 +217,12 @@ def _rollups(args) -> int:
 
 
 def _serve(args) -> int:
-    """Run the API. The ingest worker joins it in Task 12."""
+    """Run the API, with the ingest worker beside it.
+
+    One process, two roles: the worker is the only writer and the API the only
+    reader, and the worker gets its own connection so a long rebuild never holds
+    a handle the request path needs.
+    """
     from pathlib import Path
 
     from discord_scraper.config import PROJECT_DIR, load_config
@@ -232,9 +239,28 @@ def _serve(args) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
+    import threading
+
     import uvicorn
 
     from discord_scraper.api.app import create_app
 
+    if not args.no_worker:
+        threading.Thread(
+            target=_worker_thread, args=(cfg, database), daemon=True, name="ingest-worker"
+        ).start()
+
     uvicorn.run(create_app(cfg, database), host=args.host, port=args.port)
     return 0
+
+
+def _worker_thread(cfg, database) -> None:
+    """Own connection, own loop — a restart of the API does not orphan a job."""
+    from discord_scraper.api.deps import connect_writable
+    from discord_scraper.worker.loop import run_forever
+
+    conn = connect_writable(database)
+    try:
+        run_forever(conn, cfg)
+    finally:
+        conn.close()

@@ -122,3 +122,10 @@ def test_serve_accepts_host_and_port(tmp_path, capsys):
         ["serve", "--db", str(tmp_path / "x.db"), "--host", "0.0.0.0", "--port", "9001"]
     )
     assert (parsed.host, parsed.port) == ("0.0.0.0", 9001)
+
+
+def test_serve_can_run_without_the_worker(tmp_path):
+    from discord_scraper.cli import build_parser
+
+    parsed = build_parser().parse_args(["serve", "--db", str(tmp_path / "x.db"), "--no-worker"])
+    assert parsed.no_worker is True
