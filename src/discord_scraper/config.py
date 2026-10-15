@@ -52,6 +52,8 @@ class Settings:
     time_format: str = "24h"
     show_recent: int = 5
     allowlist: str = "posted"
+    client_id: str = ""
+    redirect_uri: str = ""
 
 
 @dataclass(frozen=True)
@@ -140,6 +142,14 @@ class Config:
     def allowlist(self) -> str:
         return self.settings.allowlist
 
+    @property
+    def client_id(self) -> str:
+        return self.settings.client_id
+
+    @property
+    def redirect_uri(self) -> str:
+        return self.settings.redirect_uri
+
     def scraper(self) -> ScraperConfig:
         """The three fields the scrape pipeline actually needs."""
         return ScraperConfig(
@@ -208,6 +218,10 @@ def _settings_from(raw: dict[str, Any], root: Path) -> Settings:
         time_format=str(ui.get("time_format", "24h")),
         show_recent=int(ui.get("show_recent", 5)),
         allowlist=str(access.get("allowlist", "posted")),
+        # Not secrets: a client id and a redirect URI differ per deployment and
+        # are public by design, so they belong in the file a fork edits.
+        client_id=str(access.get("client_id", "")),
+        redirect_uri=str(access.get("redirect_uri", "")),
     )
 
 
