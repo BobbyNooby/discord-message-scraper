@@ -259,21 +259,32 @@ def link_cells(conn, channel_id: str, day_index, author_index, host_index):
 
 
 def link_stats(conn, channel_id: str) -> dict[str, int]:
-    """Totals for the panel's subtitle: messages, hosts, and unfurled links.
+    """The three numbers under "Where the chat lives" (spec §5.11).
 
-    "unfurled" counts a message that has an embed; a link nobody unfurled is the
-    interesting minority (spec §5.11 measures it at ~571 messages).
+    Read from ``rollup_stats``, not counted here: all three are measured over
+    *all* links, while ``rollup_link`` ships only the top-60 hosts and
+    ``rollup_provider`` counts embed objects rather than messages. Deriving them
+    from the capped grains gave 9,267 "domains" against a reference of 539.
     """
-    msgs = rows(conn, "SELECT COUNT(DISTINCT day || author_id) FROM rollup_link WHERE channel_id = ?",
-                (channel_id,))
-    hosts = rows(conn, "SELECT COUNT(DISTINCT domain) FROM rollup_link WHERE channel_id = ?",
-                 (channel_id,))
-    embeds = rows(conn, "SELECT SUM(embeds) FROM rollup_provider WHERE channel_id = ?", (channel_id,))
+    stored = dict(rows(
+        conn, "SELECT key, value FROM rollup_stats WHERE channel_id = ?", (channel_id,)
+    ))
     return {
-        "msgs": int(msgs[0][0] or 0) if msgs else 0,
-        "domains": int(hosts[0][0] or 0) if hosts else 0,
-        "both": int(embeds[0][0] or 0) if embeds else 0,
+        "msgs": int(stored.get("link_msgs", 0)),
+        "domains": int(stored.get("link_hosts", 0)),
+        "both": int(stored.get("link_both", 0)),
     }
+
+
+def counted_total(conn, channel_id: str) -> int:
+    """The headline: messages the configured rules count (spec §18.1).
+
+    Deliberately *not* the size of the ``messages`` table — that figure includes
+    bots, joins and calls, and would disagree with `discord-scraper analyze
+    stats` about the one number a reader takes away.
+    """
+    found = rows(conn, "SELECT SUM(msgs) FROM rollup_activity WHERE channel_id = ?", (channel_id,))
+    return int(found[0][0] or 0) if found else 0
 
 
 def pairs(conn, channel_id: str, table: str, label: str, value: str, limit: int = 30):
