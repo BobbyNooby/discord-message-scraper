@@ -1,0 +1,53 @@
+# Copy to config.toml and edit.
+#
+# Secrets live in .env, never here: DISCORD_TOKEN, DISCORD_CLIENT_SECRET,
+# SESSION_SECRET, ADMIN_DISCORD_ID.
+#
+# Every value below is a setting an operator might change, which is exactly why
+# it is a file and not an environment variable.
+
+[app]
+# Renamed per fork. Shown in the UI, the page title and the API.
+name = "Discord Scraper"
+
+[source]
+# The channel to scrape. For a DM this is the id in /channels/@me/<id>.
+channel_id = ""
+# IANA zone, or "auto" for the host zone. Changing this rebuilds every date
+# bucket: 8.3% of messages land on a different local day depending on the
+# choice, so it is a data decision and not a display setting.
+timezone = "UTC"
+# Which message types count. [0, 19] is chat and replies only, which is what
+# people mean by "messages" — calls, joins and pin notices are excluded.
+count_types = [0, 19]
+# In a guild, bots out-post every human. They are marked explicitly by Discord.
+exclude_bots = true
+# Discord caps a page at 100. 50 is gentler and rarely slower.
+batch_size = 50
+
+[stopwords]
+# "en" is always loaded. Regional packs are opt-in so that nobody else's word
+# list gets worse because of your chat's language.
+packs = ["en"]
+# Extra *.txt files, one word per line, merged last so they always win.
+dir = "./stopwords.d"
+# Nicknames, in-jokes, anything that is a person rather than a topic.
+# Ships empty: only you know these.
+ignore = []
+
+[identity]
+# Fold alt accounts into one person, so their statistics do not split.
+# The admin board edits this too.
+# joyt = ["joyt2"]
+
+[worker]
+cron_enabled = true
+cron_hours = 6
+
+[ui]
+week_start = "monday"   # or "sunday"
+time_format = "24h"     # or "12h"
+show_recent = 5         # last N message bodies sent to viewers; 0 disables
+
+[access]
+allowlist = "posted"    # or "explicit"

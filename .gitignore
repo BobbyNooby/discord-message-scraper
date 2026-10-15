@@ -9,3 +9,4 @@ docs/
 .superpowers/
 .venv/
 *.egg-info/
+config.toml
