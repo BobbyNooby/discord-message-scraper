@@ -41,6 +41,11 @@ class Settings:
     timezone: str = DEFAULT_TIMEZONE
     count_types: tuple[int, ...] = DEFAULT_COUNT_TYPES
     exclude_bots: bool = True
+    # Rich media (§11.1, "most reposted"). `thumbnails` is "proxy" (fetched by
+    # this server, cached, so a viewer's IP never reaches Tenor or Klipy),
+    # "direct" (the browser talks to their CDN) or "off" (numbers only).
+    media_top_n: int = 24
+    media_thumbnails: str = "proxy"
     batch_size: int = BATCH_SIZE
     stopword_packs: list[str] = field(default_factory=lambda: ["en"])
     stopword_dir: Path = PROJECT_DIR / "stopwords.d"
@@ -135,6 +140,14 @@ class Config:
         return self.settings.time_format
 
     @property
+    def media_top_n(self) -> int:
+        return self.settings.media_top_n
+
+    @property
+    def media_thumbnails(self) -> str:
+        return self.settings.media_thumbnails
+
+    @property
     def show_recent(self) -> int:
         return self.settings.show_recent
 
@@ -192,6 +205,7 @@ def _settings_from(raw: dict[str, Any], root: Path) -> Settings:
     worker = raw.get("worker", {})
     ui = raw.get("ui", {})
     access = raw.get("access", {})
+    media = raw.get("media", {})
 
     channel_id = str(source.get("channel_id") or "").strip()
     if not channel_id:
@@ -217,6 +231,8 @@ def _settings_from(raw: dict[str, Any], root: Path) -> Settings:
         week_start=str(ui.get("week_start", "monday")),
         time_format=str(ui.get("time_format", "24h")),
         show_recent=int(ui.get("show_recent", 5)),
+        media_top_n=max(0, int(media.get("top_n", 24))),
+        media_thumbnails=str(media.get("thumbnails", "proxy")),
         allowlist=str(access.get("allowlist", "posted")),
         # Not secrets: a client id and a redirect URI differ per deployment and
         # are public by design, so they belong in the file a fork edits.

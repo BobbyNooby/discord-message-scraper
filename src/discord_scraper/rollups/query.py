@@ -287,6 +287,21 @@ def counted_total(conn, channel_id: str) -> int:
     return int(found[0][0] or 0) if found else 0
 
 
+def top_media(conn, channel_id: str, limit: int = 24) -> list[list]:
+    """``[[url, provider, kind, title, thumbnail, uses], ...]``, most reposted first."""
+    return [
+        [str(url), str(provider), str(kind), str(title or ""), str(thumbnail or ""), int(uses or 0)]
+        for url, provider, kind, title, thumbnail, uses in rows(
+            conn,
+            """
+            SELECT url, provider, kind, title, thumbnail, uses FROM rollup_media
+             WHERE channel_id = ? ORDER BY uses DESC, url LIMIT ?
+            """,
+            (channel_id, limit),
+        )
+    ]
+
+
 def pairs(conn, channel_id: str, table: str, label: str, value: str, limit: int = 30):
     """``[[label, value], ...]`` for the simple doughnut and bar panels."""
     return [

@@ -123,6 +123,27 @@ def normalise_link(url: str) -> tuple[str, str] | None:
     return host, f"{host}{path}"
 
 
+def _media_key(embed: dict[str, Any]) -> tuple[str, str, str, str] | None:
+    """The identity of a posted embed: (url, kind, title, thumbnail).
+
+    Discord gives several shapes — a gifv is a video with an image poster, a
+    YouTube link is a video with a thumbnail — so the URL falls back through
+    video, image and thumbnail rather than assuming one field exists.
+    """
+    def _url(value: Any) -> str:
+        if isinstance(value, dict):
+            return str(value.get("url") or value.get("proxy_url") or "")
+        return str(value or "")
+
+    url = str(embed.get("url") or "") or _url(embed.get("video")) or _url(embed.get("image"))
+    thumbnail = _url(embed.get("thumbnail")) or _url(embed.get("image"))
+    if not url and not thumbnail:
+        return None
+    kind = str(embed.get("type") or _UNKNOWN)
+    title = str(embed.get("title") or "").strip()[:200]
+    return (url or thumbnail, kind, title, thumbnail)
+
+
 def _name_tokens(conn: sqlite3.Connection, display: dict[str, str] | None = None) -> set[str]:
     """Tokens that are somebody's handle or display name (spec §6.2 always-on 3)."""
     names = set((display if display is not None else latest_display_names(conn)).values())
@@ -186,6 +207,11 @@ class Derived:
     links: Counter = field(default_factory=Counter)
     providers: Counter = field(default_factory=Counter)
     embed_types: Counter = field(default_factory=Counter)
+    # url -> [uses, first_seen, last_seen, provider, kind, title, thumbnail].
+    # Keyed on the URL alone: Discord reports the same GIF with a different
+    # provider (or none) depending on the post, and "this GIF was posted 28
+    # times" is a fact about the URL, not about the wrapper around it.
+    media: dict[str, list[Any]] = field(default_factory=dict)
     emoji: Counter = field(default_factory=Counter)
     reactions: Counter = field(default_factory=Counter)
     attachments: Counter = field(default_factory=Counter)
@@ -286,6 +312,28 @@ def derive(conn: sqlite3.Connection, cfg: Config, ids: Identities) -> Derived:
             provider = (embed.get("provider") or {}).get("name") or _UNPROVIDENCED
             d.providers[(author, str(provider))] += 1
             d.embed_types[str(embed.get("type") or _UNKNOWN)] += 1
+
+            # The media itself, so the same GIF posted 28 times is one row with a
+            # count and a thumbnail rather than 28 anonymous embed events.
+            media = _media_key(embed)
+            if media is not None:
+                url, kind, title, thumbnail = media
+                entry = d.media.setdefault(
+                    url, [0, created, created, str(provider), kind, title, thumbnail]
+                )
+                entry[0] += 1
+                if created < entry[1]:
+                    entry[1] = created
+                if created > entry[2]:
+                    entry[2] = created
+                # Fill gaps rather than overwrite: the first sighting is not
+                # always the one that carried a title or a thumbnail.
+                if not entry[5] and title:
+                    entry[5] = title
+                if not entry[6] and thumbnail:
+                    entry[6] = thumbnail
+                if entry[3] == _UNPROVIDENCED and str(provider) != _UNPROVIDENCED:
+                    entry[3] = str(provider)
 
         for reaction in _array(parsed, "reactions"):
             if not isinstance(reaction, dict):
@@ -444,6 +492,15 @@ def rebuild_embed_type(conn: sqlite3.Connection, cfg: Config, ids: Identities, d
     d = derived or derive(conn, cfg, ids)
     return _write(conn, cfg.channel_id, "embed_type", "channel_id, embed_type, embeds",
                   [(cfg.channel_id, kind, n) for kind, n in d.embed_types.items()])
+
+
+def rebuild_media(conn: sqlite3.Connection, cfg: Config, ids: Identities, derived=None) -> int:
+    d = derived or derive(conn, cfg, ids)
+    return _write(conn, cfg.channel_id,
+                  "media", "channel_id, url, provider, kind, title, thumbnail, uses, first_seen, last_seen",
+                  [(cfg.channel_id, url, entry[3], entry[4], entry[5], entry[6],
+                    entry[0], entry[1], entry[2])
+                   for url, entry in d.media.items()])
 
 
 def rebuild_emoji(conn: sqlite3.Connection, cfg: Config, ids: Identities, derived=None) -> int:
