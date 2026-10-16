@@ -123,6 +123,15 @@ def normalise_link(url: str) -> tuple[str, str] | None:
     return host, f"{host}{path}"
 
 
+_MEDIA_SUFFIXES = (".mp4", ".webm", ".gif", ".gifv", ".png", ".jpg", ".jpeg", ".webp")
+
+
+def _looks_like_media(url: str) -> bool:
+    """A file we can actually show, not a page about one."""
+    without_query = url.split("?", 1)[0].lower()
+    return bool(url) and without_query.endswith(_MEDIA_SUFFIXES)
+
+
 def _media_key(embed: dict[str, Any]) -> tuple[str, str, str, str, str] | None:
     """The identity of a posted embed: (url, kind, title, thumbnail, animated).
 
@@ -143,7 +152,15 @@ def _media_key(embed: dict[str, Any]) -> tuple[str, str, str, str, str] | None:
     title = str(embed.get("title") or "").strip()[:200]
     # `video` is the playable asset (an mp4 for a gifv); `image` is the animated
     # gif when there is no video. Either animates; the thumbnail often does not.
+    #
+    # But `video.url` is only sometimes a file: for YouTube it is the player page
+    # (`www.youtube.com/embed/…`), which the thumbnail proxy rightly refuses. Keep
+    # only a real asset.
     animated = _url(embed.get("video")) or _url(embed.get("image"))
+    if not _looks_like_media(animated):
+        animated = ""
+    if not _looks_like_media(thumbnail):
+        thumbnail = thumbnail if thumbnail else ""
     return (url or thumbnail, kind, title, thumbnail, animated)
 
 
