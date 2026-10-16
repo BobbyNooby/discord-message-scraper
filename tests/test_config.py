@@ -111,3 +111,42 @@ def test_the_web_extra_lists_everything_the_server_imports():
         assert package in extra, package
     # tier 1 stays dependency-free
     assert project["dependencies"] == []
+
+
+def test_the_api_only_shape_still_reads_the_other_secrets(tmp_path, monkeypatch):
+    """No token required — but not "no secrets read" either.
+
+    `serve --api` runs where the Discord token is not allowed to be, so it must
+    not demand one. The first version of that fix rebuilt the config from
+    settings alone, which silently emptied the OAuth client secret and the admin
+    id in exactly the shape meant to serve the site.
+    """
+    from discord_scraper.config import load_config
+
+    for key in ("DISCORD_TOKEN", "DISCORD_CLIENT_SECRET", "ADMIN_DISCORD_ID"):
+        monkeypatch.delenv(key, raising=False)
+    (tmp_path / ".env").write_text(
+        "DISCORD_CLIENT_SECRET=shh\nADMIN_DISCORD_ID=424242424242424242\n", encoding="utf-8"
+    )
+    (tmp_path / "config.toml").write_text(
+        '[source]\nchannel_id = "c1"\n[access]\nclient_id = "123"\n', encoding="utf-8"
+    )
+
+    cfg = load_config(env_path=tmp_path / ".env", config_path=tmp_path / "config.toml",
+                      require_token=False)
+    assert cfg.token == ""
+    assert cfg.client_secret == "shh"
+    assert cfg.admin_id == "424242424242424242"
+    assert cfg.client_id == "123"
+
+
+def test_requiring_the_token_is_still_the_default(tmp_path, monkeypatch):
+    import pytest
+
+    from discord_scraper.config import load_config
+
+    monkeypatch.delenv("DISCORD_TOKEN", raising=False)
+    (tmp_path / ".env").write_text("", encoding="utf-8")
+    (tmp_path / "config.toml").write_text('[source]\nchannel_id = "c1"\n', encoding="utf-8")
+    with pytest.raises(SystemExit):
+        load_config(env_path=tmp_path / ".env", config_path=tmp_path / "config.toml")

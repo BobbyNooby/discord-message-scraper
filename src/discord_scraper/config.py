@@ -170,15 +170,15 @@ def _load_env_file(env_path: Path) -> dict[str, str]:
     return env
 
 
-def _secrets_from(env: dict[str, str]) -> Secrets:
+def _secrets_from(env: dict[str, str], *, require_token: bool = True) -> Secrets:
     token = env.get("DISCORD_TOKEN")
-    if not token:
+    if not token and require_token:
         raise SystemExit(
             "Missing DISCORD_TOKEN. Put it in .env or the environment — "
             "secrets never live in config.toml."
         )
     return Secrets(
-        token=token,
+        token=token or "",
         client_secret=env.get("DISCORD_CLIENT_SECRET") or None,
         session_secret=env.get("SESSION_SECRET") or None,
         admin_id=env.get("ADMIN_DISCORD_ID") or None,
@@ -228,14 +228,25 @@ def _settings_from(raw: dict[str, Any], root: Path) -> Settings:
 def load_config(
     env_path: str | Path | None = None,
     config_path: str | Path | None = None,
+    *,
+    require_token: bool = True,
 ) -> Config:
+    """Everything the app needs.
+
+    ``require_token=False`` is for the API-only shape: it still reads every other
+    secret from the environment (the OAuth client secret, the admin id), it just
+    does not insist on a Discord token that shape never uses.
+    """
     env_file = Path(env_path) if env_path is not None else PROJECT_DIR / ".env"
     toml_file = Path(config_path) if config_path is not None else PROJECT_DIR / "config.toml"
 
     env = _load_env_file(env_file)
     raw = tomllib.loads(toml_file.read_text(encoding="utf-8")) if toml_file.exists() else {}
 
-    return Config(secrets=_secrets_from(env), settings=_settings_from(raw, toml_file.parent))
+    return Config(
+        secrets=_secrets_from(env, require_token=require_token),
+        settings=_settings_from(raw, toml_file.parent),
+    )
 
 
 def load_settings(config_path: str | Path | None = None) -> Settings:
