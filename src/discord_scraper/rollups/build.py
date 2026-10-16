@@ -135,7 +135,7 @@ def _name_tokens(conn: sqlite3.Connection, display: dict[str, str] | None = None
     return found
 
 
-def config_digest(cfg: Config) -> str:
+def config_digest(cfg: Config, conn: sqlite3.Connection | None = None) -> str:
     """Fingerprint of every setting a rebuild reads.
 
     Public because `status` compares it: an edit to the stopword list, the
@@ -153,6 +153,25 @@ def config_digest(cfg: Config) -> str:
         str(bool(cfg.exclude_bots)),
         ";".join(f"{k}:{','.join(sorted(v))}" for k, v in sorted((cfg.identities or {}).items())),
     ]
+    if conn is not None:
+        # Merges and "who shows" live in the database, not the config file, and
+        # both change what every rollup should contain — so they belong in the
+        # fingerprint too. Without this, hiding a person left `status` reporting
+        # "current" over tables that were now wrong (§11.6's whole point).
+        try:
+            parts.append(";".join(
+                f"{canonical}:{account}" for canonical, account in conn.execute(
+                    "SELECT canonical_id, account_id FROM identity WHERE channel_id = ? "
+                    "ORDER BY account_id",
+                    (cfg.channel_id,),
+                )
+            ))
+            parts.append(",".join(sorted(row[0] for row in conn.execute(
+                "SELECT author_id FROM author_names WHERE channel_id = ? AND included = 0",
+                (cfg.channel_id,),
+            ))))
+        except sqlite3.OperationalError:
+            pass   # a fresh database has neither table yet
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:32]
 
 
@@ -487,7 +506,7 @@ def rebuild_all(conn: sqlite3.Connection, cfg: Config, *, now: str | None = None
     create_control_tables(conn)   # author_names lives with the control plane
     ids = resolve_identities(conn, cfg)
     stamp = now or datetime.now().astimezone().isoformat(timespec="seconds")
-    config_hash = config_digest(cfg)
+    config_hash = config_digest(cfg, conn)
 
     derived = derive(conn, cfg, ids)
 

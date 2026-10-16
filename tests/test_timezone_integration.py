@@ -53,5 +53,7 @@ def test_a_timezone_change_makes_the_rollups_stale(mem_db, tmp_path):
     rebuild_all(mem_db, rebuilder)
 
     moved = cfg_fixture(tmp_path, timezone="Asia/Kuala_Lumpur")
-    assert is_stale(mem_db, "c1", "activity", config_hash=config_digest(moved)) is True
-    assert is_stale(mem_db, "c1", "activity", config_hash=config_digest(rebuilder)) is False
+    # The digest now includes the database-held identity state, so it is computed
+    # against the same connection the rebuild used.
+    assert is_stale(mem_db, "c1", "activity", config_hash=config_digest(moved, mem_db)) is True
+    assert is_stale(mem_db, "c1", "activity", config_hash=config_digest(rebuilder, mem_db)) is False

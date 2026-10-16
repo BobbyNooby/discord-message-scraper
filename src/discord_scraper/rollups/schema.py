@@ -244,6 +244,10 @@ CREATE TABLE IF NOT EXISTS author_names (
   author_id  TEXT NOT NULL,
   name       TEXT NOT NULL,
   renamed    INTEGER NOT NULL DEFAULT 0,
+  -- "Who shows" (§5.6): excluded identities are removed at build time, exactly
+  -- like a merge, so the stats page cannot undo the decision client-side and no
+  -- message is ever deleted.
+  included   INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (channel_id, author_id)
 );
 
