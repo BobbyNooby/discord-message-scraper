@@ -57,6 +57,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="ingest only; serves no HTTP (keep the token off the web host)")
     serve.add_argument("--static-dir", default=None,
                        help="path to the built SPA (default: web/dist)")
+    serve.add_argument("--dev-login", action="store_true",
+                       help="DEV ONLY: enable /auth/dev-login, which signs anyone in")
 
     return parser
 
@@ -273,12 +275,23 @@ def _serve(args) -> int:
         )
         static = None
 
+    if args.dev_login:
+        print(
+            "WARNING: --dev-login is on. Anyone who can reach this port can sign in as "
+            "viewer or admin (/auth/dev-login). Never use this on a public host.",
+            file=sys.stderr,
+        )
+
     if not args.api:
         threading.Thread(
             target=_worker_thread, args=(cfg, database), daemon=True, name="ingest-worker"
         ).start()
 
-    uvicorn.run(create_app(cfg, database, static_dir=static), host=args.host, port=args.port)
+    uvicorn.run(
+        create_app(cfg, database, static_dir=static, dev_login=args.dev_login),
+        host=args.host,
+        port=args.port,
+    )
     return 0
 
 
