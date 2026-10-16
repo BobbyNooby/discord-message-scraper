@@ -5,12 +5,30 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "discord-scraper"
 version = "0.1.0"
-description = "Scrape a Discord channel into SQLite, then analyse and chart it."
+description = "Scrape a Discord channel into SQLite, analyse it, and serve a stats site."
 readme = "README.md"
 requires-python = ">=3.11"
+license = { text = "MIT" }
+keywords = ["discord", "sqlite", "scraper", "statistics", "self-hosted"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Communications :: Chat",
+  "Topic :: Database :: Front-Ends",
+]
+
 # Tier 1 is deliberately dependency-free: the scraper speaks HTTP with urllib
 # from the standard library. Everything web-related lives in the extra below.
 dependencies = []
+
+[project.urls]
+Documentation = "https://github.com/BobbyNooby/discord-message-scraper#readme"
+Source = "https://github.com/BobbyNooby/discord-message-scraper"
 
 [project.optional-dependencies]
 web = ["fastapi", "uvicorn[standard]", "httpx", "itsdangerous", "apscheduler"]
@@ -23,7 +41,10 @@ discord-scraper = "discord_scraper.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-discord_scraper = ["data/*.txt"]
+# The stopword corpora are read at runtime; the SPA is copied here by the release
+# build (`pnpm build && cp -r web/dist src/discord_scraper/static`) so a
+# `pipx install "discord-scraper[web]"` serves the site, not just the API.
+discord_scraper = ["data/*.txt", "static/**/*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

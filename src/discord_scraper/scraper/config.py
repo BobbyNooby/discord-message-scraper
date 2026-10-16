@@ -35,10 +35,23 @@ def resolve_home(env: dict | None = None) -> Path:
     return Path.cwd()
 
 
+def resolve_db_path(home: Path | None = None, env: dict | None = None) -> Path:
+    """Where the database lives. ``DISCORD_SCRAPER_DB`` wins.
+
+    A container mounts a volume and points this at it, which is why the path is
+    settable at all: everything else in the deployment is derived from it.
+    """
+    env = os.environ if env is None else env
+    override = env.get("DISCORD_SCRAPER_DB")
+    if override:
+        return Path(override).expanduser().resolve()
+    return (home or PROJECT_DIR) / "output" / "messages.db"
+
+
 PROJECT_DIR = resolve_home()
 ENV_PATH = PROJECT_DIR / ".env"
-OUTPUT_DIR = PROJECT_DIR / "output"
-DB_PATH = OUTPUT_DIR / "messages.db"
+DB_PATH = resolve_db_path()
+OUTPUT_DIR = DB_PATH.parent
 
 
 @dataclass

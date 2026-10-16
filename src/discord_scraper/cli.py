@@ -43,7 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     for action in (rebuild, status):
         action.add_argument("--config", default=None,
                             help="config.toml to compare against (default: the checkout's)")
-    serve = sub.add_parser("serve", help="run the web API (and, later, the ingest worker)")
+    serve = sub.add_parser("serve", help="run the web API, the ingest worker and the SPA")
     serve.add_argument("--db", default=None, help="path to messages.db (default: output/)")
     serve.add_argument("--config", default=None, help="path to config.toml")
     serve.add_argument("--host", default="127.0.0.1")
@@ -143,9 +143,9 @@ def _rollups_status(args) -> int:
     if not Path(args.db).exists():
         print(f"no database at {args.db}", file=sys.stderr)
         return 2
-    digest = _digest_for(args.config)
     conn = _connect(args.db)
     try:
+        digest = _digest_for(args.config, conn)
         channel, problem = _channel_of(conn, args.channel)
         if channel is None:
             print(f"{problem} in {args.db}")
@@ -166,7 +166,7 @@ def _rollups_status(args) -> int:
         conn.close()
 
 
-def _digest_for(config_path: str | None) -> str | None:
+def _digest_for(config_path: str | None, conn) -> str | None:
     """The word-list digest, or ``None`` when there is no usable config.
 
     ``status`` stays useful without one (source-row staleness still works), so a
@@ -179,7 +179,7 @@ def _digest_for(config_path: str | None) -> str | None:
 
     path = Path(config_path) if config_path else PROJECT_DIR / "config.toml"
     try:
-        return config_digest(config_from_settings(load_settings(config_path=path)))
+        return config_digest(config_from_settings(load_settings(config_path=path)), conn)
     except SystemExit:
         return None
 
@@ -267,13 +267,13 @@ def _serve(args) -> int:
 
     from discord_scraper.api.app import create_app
 
-    static = Path(args.static_dir) if args.static_dir else PROJECT_DIR / "web" / "dist"
-    if not (static / "index.html").is_file():
+    static = _find_static(args.static_dir)
+    if static is None:
         print(
-            f"no built SPA at {static} — serving the API only (build it with: cd web && pnpm build)",
+            "no built SPA found — serving the API only "
+            "(build it with: cd web && pnpm build)",
             file=sys.stderr,
         )
-        static = None
 
     if args.dev_login:
         print(
@@ -293,6 +293,31 @@ def _serve(args) -> int:
         port=args.port,
     )
     return 0
+
+
+def _find_static(explicit: str | None, *, project_dir=None, package_dir=None) -> Path | None:
+    """The built SPA, wherever this install keeps it.
+
+    Checkout: ``web/dist``. Container or wheel: ``static/`` beside the package.
+    An explicit ``--static-dir`` wins, and a missing build is a hint rather than
+    an error — the API is useful without the SPA.
+    """
+    from pathlib import Path
+
+    from discord_scraper.scraper.config import PROJECT_DIR
+
+    home = Path(project_dir) if project_dir is not None else PROJECT_DIR
+    package = Path(package_dir) if package_dir is not None else Path(__file__).resolve().parent
+    candidates = [
+        Path(explicit) if explicit else None,
+        home / "web" / "dist",
+        package / "static",
+        home / "static",
+    ]
+    for candidate in candidates:
+        if candidate is not None and (candidate / "index.html").is_file():
+            return candidate
+    return None
 
 
 def _worker_thread(cfg, database) -> None:
