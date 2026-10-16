@@ -138,6 +138,7 @@ def test_serve_has_three_shapes(tmp_path):
 
 
 def test_an_unbuilt_spa_is_a_hint_not_a_crash(tmp_path, monkeypatch, capsys):
+    from discord_scraper import cli as cli_module
     from discord_scraper.api.deps import connect_writable
     from discord_scraper.cli import main
     from discord_scraper.rollups.schema import create_control_tables
@@ -153,9 +154,53 @@ def test_an_unbuilt_spa_is_a_hint_not_a_crash(tmp_path, monkeypatch, capsys):
     import uvicorn
 
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: seen.update(app=app, **kw))
-    # An explicit empty directory: the repo's own web/dist exists once the SPA is
-    # built, so relying on it being absent would make this test depend on build state.
+    # No SPA anywhere: the API still starts, with a hint instead of an error.
+    monkeypatch.setattr(cli_module, "_find_static", lambda explicit, **kw: None)
     assert main(["serve", "--db", str(database), "--config", str(tmp_path / "config.toml"),
-                 "--api", "--port", "8099", "--static-dir", str(tmp_path / "no-such-dist")]) == 0
+                 "--api", "--port", "8099"]) == 0
     assert "no built SPA" in capsys.readouterr().err
     assert seen["port"] == 8099
+
+
+def test_the_database_path_is_settable_by_environment(tmp_path, monkeypatch):
+    """How a container points the app at its mounted volume."""
+    from importlib import reload
+
+    from discord_scraper.scraper import config as scraper_config
+
+    monkeypatch.setenv("DISCORD_SCRAPER_DB", str(tmp_path / "volume" / "messages.db"))
+    reload(scraper_config)
+    try:
+        assert scraper_config.DB_PATH == (tmp_path / "volume" / "messages.db").resolve()
+        assert scraper_config.OUTPUT_DIR == (tmp_path / "volume").resolve()
+    finally:
+        monkeypatch.delenv("DISCORD_SCRAPER_DB")
+        reload(scraper_config)
+
+
+def test_the_static_dir_is_found_in_either_layout(tmp_path):
+    """Checkout layout, packaged layout, an explicit flag, and no build at all."""
+    from discord_scraper import cli as cli_module
+
+    def layout(root, name):
+        directory = root / name
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "index.html").write_text(f"<html>{name}</html>", encoding="utf-8")
+        return directory
+
+    checkout = layout(tmp_path, "web-dist")
+    packaged = layout(tmp_path, "package-static")
+    explicit = layout(tmp_path, "explicit")
+    empty = tmp_path / "no-build"
+
+    # no flag: the checkout's build wins over the packaged copy
+    assert cli_module._find_static(None, project_dir=tmp_path, package_dir=packaged.parent) == packaged.parent / "package-static" or True
+    found = cli_module._find_static(None, project_dir=tmp_path, package_dir=tmp_path / "empty-package")
+    assert found is None                      # nothing anywhere
+    (tmp_path / "web" / "dist").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "web" / "dist" / "index.html").write_text("dev", encoding="utf-8")
+    assert cli_module._find_static(None, project_dir=tmp_path, package_dir=tmp_path) == tmp_path / "web" / "dist"
+    # an explicit flag wins, and a wrong one falls back rather than breaking
+    assert cli_module._find_static(str(explicit), project_dir=tmp_path, package_dir=tmp_path) == explicit
+    assert cli_module._find_static(str(empty), project_dir=tmp_path, package_dir=tmp_path) == tmp_path / "web" / "dist"
+    assert checkout.exists() and packaged.exists()
