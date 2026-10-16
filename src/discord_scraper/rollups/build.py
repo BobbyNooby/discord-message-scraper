@@ -123,8 +123,8 @@ def normalise_link(url: str) -> tuple[str, str] | None:
     return host, f"{host}{path}"
 
 
-def _media_key(embed: dict[str, Any]) -> tuple[str, str, str, str] | None:
-    """The identity of a posted embed: (url, kind, title, thumbnail).
+def _media_key(embed: dict[str, Any]) -> tuple[str, str, str, str, str] | None:
+    """The identity of a posted embed: (url, kind, title, thumbnail, animated).
 
     Discord gives several shapes — a gifv is a video with an image poster, a
     YouTube link is a video with a thumbnail — so the URL falls back through
@@ -141,7 +141,10 @@ def _media_key(embed: dict[str, Any]) -> tuple[str, str, str, str] | None:
         return None
     kind = str(embed.get("type") or _UNKNOWN)
     title = str(embed.get("title") or "").strip()[:200]
-    return (url or thumbnail, kind, title, thumbnail)
+    # `video` is the playable asset (an mp4 for a gifv); `image` is the animated
+    # gif when there is no video. Either animates; the thumbnail often does not.
+    animated = _url(embed.get("video")) or _url(embed.get("image"))
+    return (url or thumbnail, kind, title, thumbnail, animated)
 
 
 def _name_tokens(conn: sqlite3.Connection, display: dict[str, str] | None = None) -> set[str]:
@@ -211,6 +214,7 @@ class Derived:
     # Keyed on the URL alone: Discord reports the same GIF with a different
     # provider (or none) depending on the post, and "this GIF was posted 28
     # times" is a fact about the URL, not about the wrapper around it.
+    # [uses, first, last, provider, kind, title, thumbnail, animated]
     media: dict[str, list[Any]] = field(default_factory=dict)
     emoji: Counter = field(default_factory=Counter)
     reactions: Counter = field(default_factory=Counter)
@@ -317,9 +321,9 @@ def derive(conn: sqlite3.Connection, cfg: Config, ids: Identities) -> Derived:
             # count and a thumbnail rather than 28 anonymous embed events.
             media = _media_key(embed)
             if media is not None:
-                url, kind, title, thumbnail = media
+                url, kind, title, thumbnail, animated = media
                 entry = d.media.setdefault(
-                    url, [0, created, created, str(provider), kind, title, thumbnail]
+                    url, [0, created, created, str(provider), kind, title, thumbnail, animated]
                 )
                 entry[0] += 1
                 if created < entry[1]:
@@ -332,6 +336,8 @@ def derive(conn: sqlite3.Connection, cfg: Config, ids: Identities) -> Derived:
                     entry[5] = title
                 if not entry[6] and thumbnail:
                     entry[6] = thumbnail
+                if not entry[7] and animated:
+                    entry[7] = animated
                 if entry[3] == _UNPROVIDENCED and str(provider) != _UNPROVIDENCED:
                     entry[3] = str(provider)
 
@@ -497,8 +503,9 @@ def rebuild_embed_type(conn: sqlite3.Connection, cfg: Config, ids: Identities, d
 def rebuild_media(conn: sqlite3.Connection, cfg: Config, ids: Identities, derived=None) -> int:
     d = derived or derive(conn, cfg, ids)
     return _write(conn, cfg.channel_id,
-                  "media", "channel_id, url, provider, kind, title, thumbnail, uses, first_seen, last_seen",
-                  [(cfg.channel_id, url, entry[3], entry[4], entry[5], entry[6],
+                  "media",
+                  "channel_id, url, provider, kind, title, thumbnail, animated, uses, first_seen, last_seen",
+                  [(cfg.channel_id, url, entry[3], entry[4], entry[5], entry[6], entry[7],
                     entry[0], entry[1], entry[2])
                    for url, entry in d.media.items()])
 

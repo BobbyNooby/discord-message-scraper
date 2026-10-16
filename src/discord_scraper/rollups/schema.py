@@ -109,6 +109,10 @@ CREATE TABLE IF NOT EXISTS rollup_media (
     kind       TEXT NOT NULL,
     title      TEXT,
     thumbnail  TEXT,
+    -- The playable version when Discord offers one: an mp4 for a gifv, which
+    -- animates and is usually far smaller than the GIF itself. The thumbnail is
+    -- often only a static poster, which is why cards used to sit still.
+    animated   TEXT,
     uses       INTEGER NOT NULL,
     first_seen TEXT,
     last_seen  TEXT,
@@ -296,16 +300,22 @@ def migrate(conn: sqlite3.Connection) -> None:
     """Bring an existing database up to the current shape.
 
     ``CREATE TABLE IF NOT EXISTS`` never adds a column, so a database created
-    before §5.6's ``included`` flag exists keeps the old shape — and the first
-    "hide this person" write then fails with "no column named included", which is
-    exactly what a running instance did. Column additions belong here.
+    before a column existed keeps the old shape — and the first write that names
+    it fails. That happened twice: §5.6's ``included`` flag ("no column named
+    included" on a running instance) and ``rollup_media.animated``. Column
+    additions belong here.
     """
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(author_names)")}
-    if columns and "included" not in columns:
-        conn.execute(
-            "ALTER TABLE author_names ADD COLUMN included INTEGER NOT NULL DEFAULT 1"
-        )
-        conn.commit()
+    added = (
+        ("author_names", "included",
+         "ALTER TABLE author_names ADD COLUMN included INTEGER NOT NULL DEFAULT 1"),
+        ("rollup_media", "animated",
+         "ALTER TABLE rollup_media ADD COLUMN animated TEXT"),
+    )
+    for table, column, ddl in added:
+        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if columns and column not in columns:
+            conn.execute(ddl)
+    conn.commit()
 
 
 def _rows_as_dicts(cursor: sqlite3.Cursor, rows: Iterable[Any]) -> list[dict[str, Any]]:

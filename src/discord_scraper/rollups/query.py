@@ -287,17 +287,30 @@ def counted_total(conn, channel_id: str) -> int:
     return int(found[0][0] or 0) if found else 0
 
 
-def top_media(conn, channel_id: str, limit: int = 24) -> list[list]:
-    """``[[url, provider, kind, title, thumbnail, uses], ...]``, most reposted first."""
+def top_media(conn, channel_id: str, limit: int = 24,
+              provider: str | None = None) -> list[list]:
+    """``[[url, provider, kind, title, thumbnail, animated, uses], ...]``.
+
+    Ranking everything together means GIFs win every slot, because a GIF gets
+    reposted far more than a video link — so the caller can ask for one provider
+    and see YouTube's or Twitter's own top instead.
+    """
+    where = "channel_id = ?"
+    params: list[Any] = [channel_id]
+    if provider:
+        where += " AND provider = ?"
+        params.append(provider)
+    params.append(limit)
     return [
-        [str(url), str(provider), str(kind), str(title or ""), str(thumbnail or ""), int(uses or 0)]
-        for url, provider, kind, title, thumbnail, uses in rows(
+        [str(url), str(provider_), str(kind), str(title or ""), str(thumbnail or ""),
+         str(animated or ""), int(uses or 0)]
+        for url, provider_, kind, title, thumbnail, animated, uses in rows(
             conn,
-            """
-            SELECT url, provider, kind, title, thumbnail, uses FROM rollup_media
-             WHERE channel_id = ? ORDER BY uses DESC, url LIMIT ?
+            f"""
+            SELECT url, provider, kind, title, thumbnail, animated, uses FROM rollup_media
+             WHERE {where} ORDER BY uses DESC, url LIMIT ?
             """,
-            (channel_id, limit),
+            tuple(params),
         )
     ]
 
