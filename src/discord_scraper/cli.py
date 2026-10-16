@@ -59,6 +59,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="path to the built SPA (default: web/dist)")
     serve.add_argument("--dev-login", action="store_true",
                        help="DEV ONLY: enable /auth/dev-login, which signs anyone in")
+    serve.add_argument("--dev-auto-login", choices=("viewer", "admin"), default=None,
+                       help="DEV ONLY: treat every visitor as this level — no login screen at all")
     serve.add_argument("--tls-cert", default=None,
                        help="TLS certificate (PEM) — serve HTTPS, e.g. for a tailnet URL")
     serve.add_argument("--tls-key", default=None, help="TLS private key (PEM)")
@@ -237,12 +239,7 @@ def _serve(args) -> int:
     """
     from pathlib import Path
 
-    from discord_scraper.config import (
-        PROJECT_DIR,
-        config_from_settings,
-        load_config,
-        load_settings,
-    )
+    from discord_scraper.config import PROJECT_DIR, load_config
     from discord_scraper.scraper.config import DB_PATH
 
     database = Path(args.db) if args.db else DB_PATH
@@ -251,12 +248,10 @@ def _serve(args) -> int:
         return 2
     config_path = Path(args.config) if args.config else PROJECT_DIR / "config.toml"
     try:
-        # `--api` serves no worker, so it must not demand a Discord credential:
-        # the split exists so the token can live only where it is needed.
-        if args.api:
-            cfg = config_from_settings(load_settings(config_path=config_path))
-        else:
-            cfg = load_config(config_path=config_path)
+        # `--api` serves no worker, so it must not *demand* a Discord token — but
+        # it must still read the other secrets, or the admin list and the OAuth
+        # client secret vanish from exactly the shape meant to run without a token.
+        cfg = load_config(config_path=config_path, require_token=not args.api)
     except SystemExit as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -294,6 +289,12 @@ def _serve(args) -> int:
             "viewer or admin (/auth/dev-login). Never use this on a public host.",
             file=sys.stderr,
         )
+    if args.dev_auto_login:
+        print(
+            f"WARNING: --dev-auto-login={args.dev_auto_login} is on. Every visitor to this "
+            "port is treated as that level with no login at all. Development only.",
+            file=sys.stderr,
+        )
 
     if not args.api:
         threading.Thread(
@@ -306,7 +307,8 @@ def _serve(args) -> int:
         return 2
 
     uvicorn.run(
-        create_app(cfg, database, static_dir=static, dev_login=args.dev_login),
+        create_app(cfg, database, static_dir=static, dev_login=args.dev_login,
+                   dev_auto_login=args.dev_auto_login),
         host=args.host,
         port=args.port,
         ssl_certfile=args.tls_cert,
