@@ -59,6 +59,9 @@ def build_parser() -> argparse.ArgumentParser:
                        help="path to the built SPA (default: web/dist)")
     serve.add_argument("--dev-login", action="store_true",
                        help="DEV ONLY: enable /auth/dev-login, which signs anyone in")
+    serve.add_argument("--tls-cert", default=None,
+                       help="TLS certificate (PEM) — serve HTTPS, e.g. for a tailnet URL")
+    serve.add_argument("--tls-key", default=None, help="TLS private key (PEM)")
 
     return parser
 
@@ -297,10 +300,17 @@ def _serve(args) -> int:
             target=_worker_thread, args=(cfg, database), daemon=True, name="ingest-worker"
         ).start()
 
+    if bool(args.tls_cert) != bool(args.tls_key):
+        # Half a TLS config is a silent downgrade waiting to happen.
+        print("--tls-cert and --tls-key must be given together", file=sys.stderr)
+        return 2
+
     uvicorn.run(
         create_app(cfg, database, static_dir=static, dev_login=args.dev_login),
         host=args.host,
         port=args.port,
+        ssl_certfile=args.tls_cert,
+        ssl_keyfile=args.tls_key,
     )
     return 0
 
