@@ -234,7 +234,12 @@ def _serve(args) -> int:
     """
     from pathlib import Path
 
-    from discord_scraper.config import PROJECT_DIR, load_config
+    from discord_scraper.config import (
+        PROJECT_DIR,
+        config_from_settings,
+        load_config,
+        load_settings,
+    )
     from discord_scraper.scraper.config import DB_PATH
 
     database = Path(args.db) if args.db else DB_PATH
@@ -243,7 +248,12 @@ def _serve(args) -> int:
         return 2
     config_path = Path(args.config) if args.config else PROJECT_DIR / "config.toml"
     try:
-        cfg = load_config(config_path=config_path)
+        # `--api` serves no worker, so it must not demand a Discord credential:
+        # the split exists so the token can live only where it is needed.
+        if args.api:
+            cfg = config_from_settings(load_settings(config_path=config_path))
+        else:
+            cfg = load_config(config_path=config_path)
     except SystemExit as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -302,14 +312,17 @@ def _find_static(explicit: str | None, *, project_dir=None, package_dir=None) ->
     An explicit ``--static-dir`` wins, and a missing build is a hint rather than
     an error — the API is useful without the SPA.
     """
+    import os
     from pathlib import Path
 
     from discord_scraper.scraper.config import PROJECT_DIR
 
     home = Path(project_dir) if project_dir is not None else PROJECT_DIR
     package = Path(package_dir) if package_dir is not None else Path(__file__).resolve().parent
+    override = os.environ.get("DISCORD_SCRAPER_STATIC")
     candidates = [
         Path(explicit) if explicit else None,
+        Path(override) if override else None,
         home / "web" / "dist",
         package / "static",
         home / "static",

@@ -67,3 +67,47 @@ def test_get_config_is_cached(tmp_path, monkeypatch):
     first = get_config(env_path=env, config_path=tmp_path / "config.toml")
     second = get_config(env_path=env, config_path=tmp_path / "config.toml")
     assert first is second
+
+
+def test_the_example_config_actually_loads(tmp_path):
+    """A template that does not parse is worse than no template.
+
+    This is the file every fork copies, so it is loaded the same way the app
+    loads a real one — with the channel id filled in, since that one value
+    genuinely has no sane default.
+    """
+    import shutil
+
+    from discord_scraper.config import load_settings
+
+    example = shutil.copy("config.example.toml", tmp_path / "config.toml")
+    text = example.read_text().replace('channel_id = ""', 'channel_id = "123"')
+    example.write_text(text)
+
+    settings = load_settings(config_path=example)
+    assert settings.channel_id == "123"
+    assert settings.timezone == "UTC"
+    assert settings.count_types == (0, 19)
+    assert settings.exclude_bots is True
+    assert settings.client_id == ""
+    assert settings.redirect_uri.endswith("/auth/callback")
+    assert settings.cron_hours == 6
+
+
+def test_the_web_extra_lists_everything_the_server_imports():
+    """A hand-installed dependency is not a declared one.
+
+    `python-multipart` was installed into the dev venv by hand, so every test
+    passed while a clean install and the container both died on the admin
+    upload's form parsing. The extra is the contract; this pins it.
+    """
+    import tomllib
+    from pathlib import Path
+
+    project = tomllib.loads(Path("pyproject.toml").read_text())["project"]
+    extra = " ".join(project["optional-dependencies"]["web"])
+    for package in ("fastapi", "uvicorn", "httpx", "itsdangerous", "apscheduler",
+                    "python-multipart"):
+        assert package in extra, package
+    # tier 1 stays dependency-free
+    assert project["dependencies"] == []
