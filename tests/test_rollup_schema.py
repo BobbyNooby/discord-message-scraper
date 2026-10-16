@@ -132,3 +132,43 @@ def test_staleness_can_consider_the_config_digest(mem_db):
                    source_count=1, timezone="UTC", config_hash="h")
     assert is_stale(mem_db, "c1", "word", config_hash="h") is False
     assert is_stale(mem_db, "c1", "word", config_hash="h2") is True
+
+
+def test_an_older_database_gains_the_included_column():
+    """The upgrade path: CREATE TABLE IF NOT EXISTS does not add columns.
+
+    A running instance created before §5.6's flag failed its first write with
+    "table author_names has no column named included"; every fixture creates
+    fresh tables, so only a test that builds the *old* shape catches it.
+    """
+    import sqlite3
+
+    from discord_scraper.rollups.schema import create_control_tables
+
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE author_names (
+              channel_id TEXT NOT NULL,
+              author_id  TEXT NOT NULL,
+              name       TEXT NOT NULL,
+              renamed    INTEGER NOT NULL DEFAULT 0,
+              PRIMARY KEY (channel_id, author_id)
+            );
+            """
+        )
+        conn.execute("INSERT INTO author_names VALUES ('c1', 'u1', 'Alice', 1)")
+        conn.commit()
+
+        create_control_tables(conn)
+
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(author_names)")}
+        assert "included" in columns
+        # an existing row is shown by default, and its name is not rewritten
+        included, renamed, name = conn.execute(
+            "SELECT included, renamed, name FROM author_names"
+        ).fetchone()
+        assert (included, renamed, name) == (1, 1, "Alice")
+    finally:
+        conn.close()
