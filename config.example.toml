@@ -59,3 +59,10 @@ allowlist = "posted"    # "posted" admits anyone who has posted; "explicit" only
 # a mismatch here is the most common cause of a silent login failure.
 client_id = ""
 redirect_uri = "https://your-host.example/auth/callback"
+
+# Rich media ("Most reposted"). thumbnails: "proxy" fetches and caches them on
+# this server, so Tenor and Klipy never learn who is reading the chat; "direct"
+# lets each viewer's browser ask them; "off" shows numbers only.
+[media]
+top_n = 24
+thumbnails = "proxy"
