@@ -262,3 +262,17 @@ def test_the_worker_shape_still_insists_on_a_token(tmp_path, monkeypatch, capsys
         "serve", "--db", str(database), "--config", str(tmp_path / "config.toml"), "--worker",
     ]) == 2
     assert "DISCORD_TOKEN" in capsys.readouterr().err
+
+
+def test_tls_flags_must_come_as_a_pair(tmp_path, capsys):
+    """A certificate without its key would silently serve plain HTTP."""
+    from discord_scraper.api.deps import connect_writable
+    from discord_scraper.cli import main
+    from discord_scraper.rollups.schema import create_control_tables
+
+    database = tmp_path / "messages.db"
+    conn = connect_writable(database)
+    create_control_tables(conn)
+    conn.close()
+    assert main(["serve", "--db", str(database), "--api", "--tls-cert", str(tmp_path / "c.pem")]) == 2
+    assert "together" in capsys.readouterr().err
