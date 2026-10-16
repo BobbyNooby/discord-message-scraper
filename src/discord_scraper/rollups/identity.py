@@ -106,6 +106,18 @@ def counted_scope(cfg: Config) -> tuple[str, list[object]]:
     return " AND ".join(where), params
 
 
+def _hidden(conn: sqlite3.Connection, cfg: Config) -> set[str]:
+    """Canonical ids an operator switched off in the admin board (§5.6)."""
+    if not _table_exists(conn, "author_names"):
+        return set()
+    return {
+        row[0] for row in conn.execute(
+            "SELECT author_id FROM author_names WHERE channel_id = ? AND included = 0",
+            (cfg.channel_id,),
+        )
+    }
+
+
 def _author_counts(conn: sqlite3.Connection, cfg: Config) -> list[tuple[str, int]]:
     """Counted messages per author: the channel's real messages, bots excluded."""
     where, params = counted_scope(cfg)
@@ -127,11 +139,14 @@ def resolve_identities(conn: sqlite3.Connection, cfg: Config) -> Identities:
     """The channel's authors as displayable rows, alts folded together."""
     display = latest_display_names(conn)
     merge = _merge_map(conn, cfg)
+    hidden = _hidden(conn, cfg)
 
     members: dict[str, list[str]] = {}
     totals: dict[str, int] = {}
     for author_id, count in _author_counts(conn, cfg):
         canonical = _canonical(author_id, merge)
+        if canonical in hidden:
+            continue
         members.setdefault(canonical, []).append(author_id)
         totals[canonical] = totals.get(canonical, 0) + count
 
