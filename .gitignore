@@ -15,3 +15,7 @@ config.toml
 web/node_modules/
 web/dist/
 *.tsbuildinfo
+
+# python -m build artifacts
+build/
+dist/
