@@ -44,7 +44,7 @@ def test_every_family_has_a_table_keyed_on_channel_id(mem_db):
         assert f"rollup_{family}" in names, family
         assert _pk_columns(mem_db, f"rollup_{family}")[0] == "channel_id", family
     assert _pk_columns(mem_db, "rollup_meta") == ["channel_id", "family"]
-    assert len(ROLLUP_TABLES) == len(FAMILIES) == 14
+    assert len(ROLLUP_TABLES) == len(FAMILIES) == 15
 
 
 def test_create_is_idempotent(mem_db):

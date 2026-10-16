@@ -22,6 +22,7 @@ FAMILIES: tuple[str, ...] = (
     "link",
     "provider",
     "embed_type",
+    "media",
     "emoji",
     "reaction",
     "attachment",
@@ -95,6 +96,23 @@ CREATE TABLE IF NOT EXISTS rollup_embed_type (
   embed_type TEXT NOT NULL,
   embeds     INTEGER NOT NULL,
   PRIMARY KEY (channel_id, embed_type)
+);
+
+-- One row per distinct embed URL. `rollup_provider` counts embeds per author;
+-- this counts the media itself, which is what "reposted 28 times" needs. The
+-- provider and kind are whatever Discord reports, so a switch from Tenor to
+-- Klipy needs no code change.
+CREATE TABLE IF NOT EXISTS rollup_media (
+    channel_id TEXT NOT NULL,
+    url        TEXT NOT NULL,
+    provider   TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    title      TEXT,
+    thumbnail  TEXT,
+    uses       INTEGER NOT NULL,
+    first_seen TEXT,
+    last_seen  TEXT,
+    PRIMARY KEY (channel_id, url)
 );
 
 CREATE TABLE IF NOT EXISTS rollup_emoji (

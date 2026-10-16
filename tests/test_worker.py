@@ -152,7 +152,7 @@ def test_run_job_rebuild_writes_rollups_and_completes(two_conns, cfg):
     assert other.execute("SELECT COUNT(*) FROM rollup_activity").fetchone()[0] == 2
     row = other.execute("SELECT status, result FROM jobs").fetchone()
     assert row["status"] == "done"
-    assert "14" in row["result"]
+    assert "15" in row["result"]
 
 
 def test_run_job_failure_is_recorded_and_raised(two_conns, cfg, monkeypatch):
