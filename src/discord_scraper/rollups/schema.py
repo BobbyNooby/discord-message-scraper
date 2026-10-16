@@ -265,11 +265,29 @@ CREATE TABLE IF NOT EXISTS identity (
 def create_rollup_tables(conn: sqlite3.Connection) -> None:
     """Create every derived table. Idempotent."""
     conn.executescript(ROLLUP_DDL)
+    migrate(conn)
 
 
 def create_control_tables(conn: sqlite3.Connection) -> None:
     """Create the control plane (auth, jobs, worker health, identity). Idempotent."""
     conn.executescript(CONTROL_DDL)
+    migrate(conn)
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    """Bring an existing database up to the current shape.
+
+    ``CREATE TABLE IF NOT EXISTS`` never adds a column, so a database created
+    before §5.6's ``included`` flag exists keeps the old shape — and the first
+    "hide this person" write then fails with "no column named included", which is
+    exactly what a running instance did. Column additions belong here.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(author_names)")}
+    if columns and "included" not in columns:
+        conn.execute(
+            "ALTER TABLE author_names ADD COLUMN included INTEGER NOT NULL DEFAULT 1"
+        )
+        conn.commit()
 
 
 def _rows_as_dicts(cursor: sqlite3.Cursor, rows: Iterable[Any]) -> list[dict[str, Any]]:
