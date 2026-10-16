@@ -51,4 +51,11 @@ time_format = "24h"     # or "12h"
 show_recent = 5         # last N message bodies sent to viewers; 0 disables
 
 [access]
-allowlist = "posted"    # or "explicit"
+allowlist = "posted"    # "posted" admits anyone who has posted; "explicit" only
+                        # admits ids with an allow=1 row in the admin board.
+# Discord OAuth. The client id and redirect URI are public by design, which is
+# why they live here and not in .env; the *secret* stays in the environment.
+# Register the redirect URI in the Discord developer portal exactly as written —
+# a mismatch here is the most common cause of a silent login failure.
+client_id = ""
+redirect_uri = "https://your-host.example/auth/callback"

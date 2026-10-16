@@ -178,7 +178,7 @@ def test_the_database_path_is_settable_by_environment(tmp_path, monkeypatch):
         reload(scraper_config)
 
 
-def test_the_static_dir_is_found_in_either_layout(tmp_path):
+def test_the_static_dir_is_found_in_either_layout(tmp_path, monkeypatch):
     """Checkout layout, packaged layout, an explicit flag, and no build at all."""
     from discord_scraper import cli as cli_module
 
@@ -200,7 +200,65 @@ def test_the_static_dir_is_found_in_either_layout(tmp_path):
     (tmp_path / "web" / "dist").mkdir(parents=True, exist_ok=True)
     (tmp_path / "web" / "dist" / "index.html").write_text("dev", encoding="utf-8")
     assert cli_module._find_static(None, project_dir=tmp_path, package_dir=tmp_path) == tmp_path / "web" / "dist"
+    # the environment override is how the container points at its copied SPA
+    monkeypatch.setenv("DISCORD_SCRAPER_STATIC", str(packaged))
+    assert cli_module._find_static(None, project_dir=tmp_path, package_dir=tmp_path) == packaged
+    monkeypatch.delenv("DISCORD_SCRAPER_STATIC")
     # an explicit flag wins, and a wrong one falls back rather than breaking
     assert cli_module._find_static(str(explicit), project_dir=tmp_path, package_dir=tmp_path) == explicit
     assert cli_module._find_static(str(empty), project_dir=tmp_path, package_dir=tmp_path) == tmp_path / "web" / "dist"
     assert checkout.exists() and packaged.exists()
+
+
+def test_the_api_shape_needs_no_discord_token(tmp_path, monkeypatch, capsys):
+    """`serve --api` is the shape that runs where the token is not allowed to be."""
+    from pathlib import Path
+
+    import uvicorn
+
+    from discord_scraper.api.deps import connect_writable
+    from discord_scraper.cli import main
+    from discord_scraper.rollups.schema import create_control_tables
+
+    database = tmp_path / "messages.db"
+    conn = connect_writable(database)
+    create_control_tables(conn)
+    conn.close()
+    # a config with a channel and nothing else — no .env, no token anywhere
+    (tmp_path / "config.toml").write_text(
+        '[source]\nchannel_id = "c1"\ntimezone = "UTC"\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
+    assert main(["serve", "--db", str(database), "--config", str(tmp_path / "config.toml"),
+                 "--api", "--port", "8098"]) == 0
+
+
+def test_the_worker_shape_still_insists_on_a_token(tmp_path, monkeypatch, capsys):
+    """The other half of the contract: a worker with no token fails loudly.
+
+    `load_config` is stubbed rather than pointed at a missing `.env`, because the
+    real one is read by default and this machine has a token in it — which is
+    also why the first version of this test hung on a live worker loop.
+    """
+    from discord_scraper import cli as cli_module
+    from discord_scraper.api.deps import connect_writable
+    from discord_scraper.rollups.schema import create_control_tables
+
+    database = tmp_path / "messages.db"
+    conn = connect_writable(database)
+    create_control_tables(conn)
+    conn.close()
+    (tmp_path / "config.toml").write_text(
+        '[source]\nchannel_id = "c1"\ntimezone = "UTC"\n', encoding="utf-8"
+    )
+
+    def refuse(*_args, **_kwargs):
+        raise SystemExit("Missing DISCORD_TOKEN. Put it in .env or the environment.")
+
+    # `_serve` imports the loader at call time from its own module, so that is
+    # where the patch has to land.
+    monkeypatch.setattr("discord_scraper.config.load_config", refuse)
+    assert cli_module.main([
+        "serve", "--db", str(database), "--config", str(tmp_path / "config.toml"), "--worker",
+    ]) == 2
+    assert "DISCORD_TOKEN" in capsys.readouterr().err
