@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
 INDEXES = """
+-- Every channel-scoped query (staleness, identity, the API's bootstrap key) is
+-- WHERE channel_id = ?; without this it is a full scan of a 766 MB table.
+CREATE INDEX IF NOT EXISTS idx_channel ON messages (channel_id);
 CREATE INDEX IF NOT EXISTS idx_created ON messages (created_at);
 CREATE INDEX IF NOT EXISTS idx_author ON messages (author_id);
 CREATE INDEX IF NOT EXISTS idx_type ON messages (type);

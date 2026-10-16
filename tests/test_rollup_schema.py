@@ -172,3 +172,41 @@ def test_an_older_database_gains_the_included_column():
         assert (included, renamed, name) == (1, 1, "Alice")
     finally:
         conn.close()
+
+
+def test_the_cheap_staleness_check_uses_the_newest_id_only(mem_db):
+    """What the dashboard asks on every load: ~0 ms, no scan.
+
+    The thorough count comparison below it costs a 766 MB scan on the reference
+    database, so the read path takes the indexed question — and the trade-off is
+    pinned here: a differing count alone does NOT read as stale in cheap mode,
+    which is why `rollups status` keeps the expensive check.
+    """
+    create_rollup_tables(mem_db)
+    # Fixed-width ids, like Discord's snowflakes: lexicographic order is then
+    # chronological, which is what the indexed check relies on.
+    _insert_message(mem_db, "0009")
+    set_provenance(mem_db, "c1", "activity", computed_at="now", source_max_id="0009",
+                   source_count=999, timezone="UTC", config_hash="h")
+
+    assert is_stale(mem_db, "c1", "activity", cheap=True) is False   # newest id matches
+    assert is_stale(mem_db, "c1", "activity") is True                # count does not
+
+    _insert_message(mem_db, "0010")
+    assert is_stale(mem_db, "c1", "activity", cheap=True) is True    # a new message is caught
+
+
+def test_the_api_boot_adds_the_channel_index(seeded_db_path, tmp_path):
+    """Without it, every channel-scoped query scans the whole table."""
+    import sqlite3
+
+    from discord_scraper.api.app import create_app
+    from tests.conftest import cfg_fixture
+
+    before = {row[1] for row in sqlite3.connect(seeded_db_path).execute("PRAGMA index_list(messages)")}
+    assert "idx_channel" not in before
+
+    create_app(cfg_fixture(tmp_path), seeded_db_path)
+
+    after = {row[1] for row in sqlite3.connect(seeded_db_path).execute("PRAGMA index_list(messages)")}
+    assert "idx_channel" in after

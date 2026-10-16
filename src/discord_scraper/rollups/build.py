@@ -505,7 +505,10 @@ def rebuild_all(conn: sqlite3.Connection, cfg: Config, *, now: str | None = None
     create_rollup_tables(conn)
     create_control_tables(conn)   # author_names lives with the control plane
     ids = resolve_identities(conn, cfg)
-    stamp = now or datetime.now().astimezone().isoformat(timespec="seconds")
+    # Microseconds, not seconds: the API caches its payload keyed on provenance,
+    # and two rebuilds inside the same second would otherwise be indistinguishable
+    # — which is exactly how a stale payload gets served after a rebuild.
+    stamp = now or datetime.now().astimezone().isoformat(timespec="microseconds")
     config_hash = config_digest(cfg, conn)
 
     derived = derive(conn, cfg, ids)
