@@ -223,6 +223,13 @@ def client_for(db_cfg, conn):
     return build
 
 
+@pytest.fixture(autouse=True)
+def _no_payload_warmup(monkeypatch):
+    """The boot warm-up is a background thread; tests that count assemblies need
+    the work to happen where they expect it."""
+    monkeypatch.setenv("DISCORD_SCRAPER_NO_WARMUP", "1")
+
+
 @pytest.fixture
 def client(db_cfg, conn):
     """An authenticated client — the viewer every read endpoint expects."""

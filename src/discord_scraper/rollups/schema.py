@@ -350,6 +350,7 @@ def is_stale(
     family: str,
     *,
     config_hash: str | None = None,
+    cheap: bool = False,
 ) -> bool:
     """True when the source or the word-list inputs no longer match the build.
 
@@ -363,6 +364,37 @@ def is_stale(
         return True
     if config_hash is not None and recorded["config_hash"] != config_hash:
         return True
+    if cheap:
+        # One indexed lookup (~0 ms on 492k rows). The full comparison below costs
+        # a 766 MB scan, which is fine for `rollups status` and unacceptable on
+        # every dashboard load. The trade-off is explicit: this detects new
+        # messages, not deletions — and the scraper never deletes.
+        #
+        # It compares ids as strings, which is chronological because Discord
+        # snowflakes are fixed-width. Fixtures with hand-written ids ("9" vs "10")
+        # violate that, which is why the tests here use padded ids.
+        # The primary-key index scanned backwards finds the newest id without
+        # looking at any other row: 0 ms against 2.4 s for MAX(id) once a channel
+        # index exists, because the planner then prefers the channel index.
+        try:
+            newest = conn.execute(
+                "SELECT id FROM messages INDEXED BY sqlite_autoindex_messages_1 "
+                " WHERE channel_id = ? ORDER BY id DESC LIMIT 1",
+                (channel_id,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            # The implicit index has a generated name. If a schema ever changes it,
+            # this path is still correct — just slower — and a missing table reads
+            # as stale either way.
+            try:
+                newest = conn.execute(
+                    "SELECT id FROM messages WHERE channel_id = ? ORDER BY id DESC LIMIT 1",
+                    (channel_id,),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                return True
+        return (recorded["source_max_message_id"] or "") != ((newest[0] if newest else "") or "")
+
     try:
         current_count, current_max = conn.execute(
             "SELECT COUNT(*), MAX(id) FROM messages WHERE channel_id = ?", (channel_id,)
