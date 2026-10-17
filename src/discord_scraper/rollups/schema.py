@@ -222,6 +222,7 @@ CREATE TABLE IF NOT EXISTS rollup_meta (
 
 CONTROL_TABLES: tuple[str, ...] = (
     "jobs",
+    "rebuild_events",
     "author_names",
     "sessions",
     "viewers",
@@ -241,7 +242,25 @@ CREATE TABLE IF NOT EXISTS jobs (
   started_at TEXT,
   finished_at TEXT,
   result TEXT,
-  error TEXT
+  error TEXT,
+  -- What the job is doing right now ("deriving", "writing"), so a job in flight
+  -- says more than "running" (a rebuild's derive phase is minutes long).
+  phase TEXT
+);
+
+-- The rebuild's own log: a run-level start/finish pair plus one pair per family.
+-- Small and append-only, but bounded by `build.prune_rebuild_events` so a
+-- long-lived instance cannot grow it forever.
+CREATE TABLE IF NOT EXISTS rebuild_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  started_at TEXT,
+  finished_at TEXT,
+  kind TEXT,                              -- "run" or "family"
+  family TEXT,                            -- NULL for a run-level event
+  phase TEXT,                             -- "started", "finished", "failed"
+  message TEXT,
+  rows INTEGER,
+  seconds REAL
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -337,6 +356,8 @@ def migrate(conn: sqlite3.Connection) -> None:
          "ALTER TABLE author_names ADD COLUMN included INTEGER NOT NULL DEFAULT 1"),
         ("rollup_media", "animated",
          "ALTER TABLE rollup_media ADD COLUMN animated TEXT"),
+        ("jobs", "phase",
+         "ALTER TABLE jobs ADD COLUMN phase TEXT"),
     )
     for table, column, ddl in added:
         columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
