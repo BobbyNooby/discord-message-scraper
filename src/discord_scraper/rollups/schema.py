@@ -260,6 +260,14 @@ CREATE TABLE IF NOT EXISTS viewers (
   added_at TEXT
 );
 
+-- Who may run the board (spec §8.1). Seeded from `ADMIN_DISCORD_ID` at boot so
+-- the configured admin lives in the database; the config stays a fallback.
+CREATE TABLE IF NOT EXISTS admins (
+  discord_id TEXT PRIMARY KEY,
+  added_at TEXT,
+  added_by TEXT
+);
+
 CREATE TABLE IF NOT EXISTS login_attempts (
   ip TEXT NOT NULL,
   at TEXT NOT NULL,
