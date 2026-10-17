@@ -59,8 +59,6 @@ def build_parser() -> argparse.ArgumentParser:
                        help="path to the built SPA (default: web/dist)")
     serve.add_argument("--dev-login", action="store_true",
                        help="DEV ONLY: enable /auth/dev-login, which signs anyone in")
-    serve.add_argument("--dev-auto-login", choices=("viewer", "admin"), default=None,
-                       help="DEV ONLY: treat every visitor as this level — no login screen at all")
     serve.add_argument("--tls-cert", default=None,
                        help="TLS certificate (PEM) — serve HTTPS, e.g. for a tailnet URL")
     serve.add_argument("--tls-key", default=None, help="TLS private key (PEM)")
@@ -297,13 +295,6 @@ def _serve(args) -> int:
             "viewer or admin (/auth/dev-login). Never use this on a public host.",
             file=sys.stderr,
         )
-    if args.dev_auto_login:
-        print(
-            f"WARNING: --dev-auto-login={args.dev_auto_login} is on. Every visitor to this "
-            "port is treated as that level with no login at all. Development only.",
-            file=sys.stderr,
-        )
-
     if not args.api:
         threading.Thread(
             target=_worker_thread, args=(cfg, database), daemon=True, name="ingest-worker"
@@ -315,8 +306,7 @@ def _serve(args) -> int:
         return 2
 
     uvicorn.run(
-        create_app(cfg, database, static_dir=static, dev_login=args.dev_login,
-                   dev_auto_login=args.dev_auto_login),
+        create_app(cfg, database, static_dir=static, dev_login=args.dev_login),
         host=args.host,
         port=args.port,
         ssl_certfile=args.tls_cert,
