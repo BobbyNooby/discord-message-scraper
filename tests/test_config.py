@@ -5,6 +5,8 @@ timezone in a secret store is an operator setting nobody can change.
 """
 from __future__ import annotations
 
+import pytest
+
 from discord_scraper.config import get_config, load_config
 
 
@@ -12,6 +14,21 @@ def _env(tmp_path, monkeypatch, **values):
     for key, value in values.items():
         monkeypatch.setenv(key, value)
     return tmp_path / ".env"
+
+
+def _reject(tmp_path, monkeypatch, extra):
+    """Load a config made of a valid ``[source]`` plus ``extra``; return the message.
+
+    ``extra`` is appended inside the ``[source]`` table, so a case adds its own
+    table header when it needs another section.
+    """
+    monkeypatch.setenv("DISCORD_TOKEN", "t")
+    (tmp_path / "config.toml").write_text(
+        '[source]\nchannel_id = "1"\n' + extra, encoding="utf-8"
+    )
+    with pytest.raises(SystemExit) as exc:
+        load_config(env_path=tmp_path / ".env", config_path=tmp_path / "config.toml")
+    return str(exc.value)
 
 
 def test_secrets_come_from_the_environment_not_the_toml(tmp_path, monkeypatch):
@@ -83,6 +100,9 @@ def test_the_example_config_actually_loads(tmp_path):
     example = shutil.copy("config.example.toml", tmp_path / "config.toml")
     text = example.read_text().replace('channel_id = ""', 'channel_id = "123"')
     example.write_text(text)
+    # The template names ``dir = "./stopwords.d"``; a deployment that keeps it
+    # has to create the directory, and validation insists on that.
+    (tmp_path / "stopwords.d").mkdir()
 
     settings = load_settings(config_path=example)
     assert settings.channel_id == "123"
@@ -150,3 +170,94 @@ def test_requiring_the_token_is_still_the_default(tmp_path, monkeypatch):
     (tmp_path / "config.toml").write_text('[source]\nchannel_id = "c1"\n', encoding="utf-8")
     with pytest.raises(SystemExit):
         load_config(env_path=tmp_path / ".env", config_path=tmp_path / "config.toml")
+
+
+# --- values that would otherwise only fail later ------------------------------
+
+
+def test_a_timezone_that_is_not_iana_is_rejected(tmp_path, monkeypatch):
+    """``GMT+8`` looks like a zone but ``ZoneInfo`` cannot name it."""
+    message = _reject(tmp_path, monkeypatch, 'timezone = "GMT+8"\n')
+    assert "source.timezone" in message
+    assert "IANA" in message
+
+
+def test_a_negative_show_recent_is_rejected(tmp_path, monkeypatch):
+    """SQLite reads ``LIMIT -1`` as no limit, so this would dump the channel."""
+    message = _reject(tmp_path, monkeypatch, "[ui]\nshow_recent = -1\n")
+    assert "ui.show_recent" in message
+    assert "200" in message
+
+
+@pytest.mark.parametrize("hours", [0, 99])
+def test_cron_hours_outside_1_to_24_is_rejected(tmp_path, monkeypatch, hours):
+    """The admin PUT already bounds this; a hand-edited file must match."""
+    message = _reject(tmp_path, monkeypatch, f"[worker]\ncron_hours = {hours}\n")
+    assert "worker.cron_hours" in message
+    assert "24" in message
+
+
+def test_empty_count_types_is_rejected(tmp_path, monkeypatch):
+    """An empty list counts nothing and writes empty rollups without complaint."""
+    message = _reject(tmp_path, monkeypatch, "count_types = []\n")
+    assert "source.count_types" in message
+
+
+def test_an_unknown_allowlist_mode_is_rejected(tmp_path, monkeypatch):
+    message = _reject(tmp_path, monkeypatch, '[access]\nallowlist = "whatever"\n')
+    assert "access.allowlist" in message
+    assert "posted" in message
+    assert "explicit" in message
+
+
+def test_an_unknown_thumbnail_mode_is_rejected(tmp_path, monkeypatch):
+    """Every unknown value silently meant ``proxy``, which fetches from a CDN."""
+    message = _reject(tmp_path, monkeypatch, '[media]\nthumbnails = "cdn"\n')
+    assert "media.thumbnails" in message
+    assert "proxy" in message
+    assert "off" in message
+
+
+def test_a_negative_media_top_n_is_rejected(tmp_path, monkeypatch):
+    message = _reject(tmp_path, monkeypatch, "[media]\ntop_n = -3\n")
+    assert "media.top_n" in message
+    assert "0" in message
+
+
+def test_a_stopwords_dir_that_does_not_exist_is_rejected(tmp_path, monkeypatch):
+    message = _reject(tmp_path, monkeypatch, '[stopwords]\ndir = "missing.d"\n')
+    assert "stopwords.dir" in message
+
+
+def test_the_documented_auto_timezone_is_still_accepted(tmp_path, monkeypatch):
+    """``timezone = "auto"`` means the host zone (``timeutil.resolve_tz``)."""
+    monkeypatch.setenv("DISCORD_TOKEN", "t")
+    (tmp_path / "config.toml").write_text(
+        '[source]\nchannel_id = "1"\ntimezone = "auto"\n', encoding="utf-8"
+    )
+    cfg = load_config(env_path=tmp_path / ".env", config_path=tmp_path / "config.toml")
+    assert cfg.timezone == "auto"
+
+
+def test_a_fully_valid_config_still_loads(tmp_path, monkeypatch):
+    monkeypatch.setenv("DISCORD_TOKEN", "t")
+    (tmp_path / "stopwords.d").mkdir()
+    (tmp_path / "config.toml").write_text(
+        '[source]\nchannel_id = "1"\ntimezone = "Asia/Kuala_Lumpur"\n'
+        "count_types = [0, 19]\n"
+        '[stopwords]\ndir = "./stopwords.d"\n'
+        "[worker]\ncron_hours = 24\n"
+        "[ui]\nshow_recent = 200\n"
+        '[access]\nallowlist = "explicit"\n'
+        '[media]\ntop_n = 0\nthumbnails = "off"\n',
+        encoding="utf-8",
+    )
+    cfg = load_config(env_path=tmp_path / ".env", config_path=tmp_path / "config.toml")
+    assert cfg.timezone == "Asia/Kuala_Lumpur"
+    assert cfg.count_types == (0, 19)
+    assert cfg.cron_hours == 24
+    assert cfg.show_recent == 200
+    assert cfg.allowlist == "explicit"
+    assert cfg.media_top_n == 0
+    assert cfg.media_thumbnails == "off"
+    assert cfg.stopword_dir == tmp_path / "stopwords.d"

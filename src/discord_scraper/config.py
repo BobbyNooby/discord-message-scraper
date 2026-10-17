@@ -15,6 +15,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from discord_scraper.scraper.config import BATCH_SIZE, PROJECT_DIR, normalize_batch_size
 from discord_scraper.scraper.config import Config as ScraperConfig
@@ -22,6 +23,17 @@ from discord_scraper.scraper.config import Config as ScraperConfig
 DEFAULT_APP_NAME = "Discord Scraper"
 DEFAULT_TIMEZONE = "UTC"
 DEFAULT_COUNT_TYPES = (0, 19)  # real messages only: chat, not calls/joins/pins
+
+# "auto" means the host zone (see ``timeutil.resolve_tz``); everything else has
+# to be a name ``ZoneInfo`` knows, or every date bucket silently lands wrong.
+AUTO_TIMEZONE = "auto"
+MAX_SHOW_RECENT = 200
+MIN_CRON_HOURS = 1
+MAX_CRON_HOURS = 24
+# Mirrors ``api.admin.ALLOWLIST_POLICIES``; config.py must not import the web
+# extra, and these two strings are the contract the auth layer reads.
+ALLOWLIST_MODES = ("posted", "explicit")
+THUMBNAIL_MODES = ("proxy", "direct", "off")
 
 
 @dataclass(frozen=True)
@@ -198,6 +210,14 @@ def _secrets_from(env: dict[str, str], *, require_token: bool = True) -> Secrets
     )
 
 
+def _int_setting(key: str, value: Any) -> int:
+    """A whole number, or a config error that names where it came from."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise SystemExit(f'{key}: "{value}" is not a whole number') from None
+
+
 def _settings_from(raw: dict[str, Any], root: Path) -> Settings:
     app = raw.get("app", {})
     source = raw.get("source", {})
@@ -211,29 +231,88 @@ def _settings_from(raw: dict[str, Any], root: Path) -> Settings:
     if not channel_id:
         raise SystemExit("Missing source.channel_id in config.toml.")
 
+    timezone = str(source.get("timezone", DEFAULT_TIMEZONE))
+    if timezone != AUTO_TIMEZONE:
+        try:
+            ZoneInfo(timezone)
+        except (ZoneInfoNotFoundError, ValueError):
+            # A slash-less offset like "GMT+8" can raise either one.
+            raise SystemExit(
+                f'source.timezone: "{timezone}" is not an IANA timezone name '
+                '(try "Asia/Kuala_Lumpur")'
+            ) from None
+
+    count_types = tuple(source.get("count_types", DEFAULT_COUNT_TYPES))
+    if not count_types:
+        raise SystemExit(
+            "source.count_types: needs at least one message type (for example [0, 19])"
+        )
+
+    cron_hours = _int_setting("worker.cron_hours", worker.get("cron_hours", 6))
+    if not MIN_CRON_HOURS <= cron_hours <= MAX_CRON_HOURS:
+        raise SystemExit(
+            f"worker.cron_hours: {cron_hours} is out of range "
+            f"({MIN_CRON_HOURS}-{MAX_CRON_HOURS})"
+        )
+
+    show_recent = _int_setting("ui.show_recent", ui.get("show_recent", 5))
+    if not 0 <= show_recent <= MAX_SHOW_RECENT:
+        raise SystemExit(
+            f"ui.show_recent: {show_recent} is out of range (0-{MAX_SHOW_RECENT})"
+        )
+
+    media_top_n = _int_setting("media.top_n", media.get("top_n", 24))
+    if media_top_n < 0:
+        raise SystemExit(f"media.top_n: {media_top_n} is out of range (>= 0)")
+
+    media_thumbnails = str(media.get("thumbnails", "proxy"))
+    if media_thumbnails not in THUMBNAIL_MODES:
+        raise SystemExit(
+            f'media.thumbnails: "{media_thumbnails}" is not one of: '
+            + ", ".join(THUMBNAIL_MODES)
+        )
+
+    allowlist = str(access.get("allowlist", "posted"))
+    if allowlist not in ALLOWLIST_MODES:
+        raise SystemExit(
+            f'access.allowlist: "{allowlist}" is not one of: ' + ", ".join(ALLOWLIST_MODES)
+        )
+
     packs = stop.get("packs")
     stop_dir = stop.get("dir")
+    if stop_dir:
+        # A relative dir belongs to the file it was written in, not to whichever
+        # directory the command happened to run from.
+        stopword_dir = Path(stop_dir).expanduser()
+        if not stopword_dir.is_absolute():
+            stopword_dir = root / stopword_dir
+        if not stopword_dir.is_dir():
+            raise SystemExit(
+                f'stopwords.dir: "{stop_dir}" is not an existing directory'
+            )
+    else:
+        stopword_dir = root / "stopwords.d"
 
     return Settings(
         channel_id=channel_id,
         app_name=str(app.get("name", DEFAULT_APP_NAME)),
-        timezone=str(source.get("timezone", DEFAULT_TIMEZONE)),
-        count_types=tuple(source.get("count_types", DEFAULT_COUNT_TYPES)),
+        timezone=timezone,
+        count_types=count_types,
         exclude_bots=bool(source.get("exclude_bots", True)),
         batch_size=normalize_batch_size(source.get("batch_size", BATCH_SIZE)),
         stopword_packs=[str(p) for p in packs] if packs else ["en"],
-        stopword_dir=Path(stop_dir).expanduser() if stop_dir else root / "stopwords.d",
+        stopword_dir=stopword_dir,
         ignore_words=[str(w) for w in stop.get("ignore", [])],
         identities={str(k): [str(a) for a in v]
                     for k, v in raw.get("identity", {}).items()},
         cron_enabled=bool(worker.get("cron_enabled", True)),
-        cron_hours=int(worker.get("cron_hours", 6)),
+        cron_hours=cron_hours,
         week_start=str(ui.get("week_start", "monday")),
         time_format=str(ui.get("time_format", "24h")),
-        show_recent=int(ui.get("show_recent", 5)),
-        media_top_n=max(0, int(media.get("top_n", 24))),
-        media_thumbnails=str(media.get("thumbnails", "proxy")),
-        allowlist=str(access.get("allowlist", "posted")),
+        show_recent=show_recent,
+        media_top_n=media_top_n,
+        media_thumbnails=media_thumbnails,
+        allowlist=allowlist,
         # Not secrets: a client id and a redirect URI differ per deployment and
         # are public by design, so they belong in the file a fork edits.
         client_id=str(access.get("client_id", "")),
