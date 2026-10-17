@@ -375,3 +375,14 @@ def test_correctly_typed_booleans_and_count_types_still_load(tmp_path, monkeypat
     assert cfg.count_types == (0, 19)
     assert cfg.exclude_bots is True
     assert cfg.cron_enabled is False
+
+
+def test_the_timezone_predicate_agrees_with_the_loader():
+    """One predicate, so the file and the board cannot disagree: "auto" is
+    documented, a real IANA name is required otherwise, and an offset is not."""
+    from discord_scraper.config import is_timezone
+
+    assert is_timezone("auto")
+    assert is_timezone("Asia/Kuala_Lumpur")
+    assert not is_timezone("GMT+8")
+    assert not is_timezone("Mars/Olympus")

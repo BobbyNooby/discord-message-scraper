@@ -214,6 +214,24 @@ def _secrets_from(env: dict[str, str], *, require_token: bool = True) -> Secrets
     )
 
 
+def is_timezone(name: str) -> bool:
+    """True for a real IANA zone, and for the documented ``"auto"``.
+
+    One predicate so the config file and the admin board cannot disagree: the
+    board's PUT validator used to answer "unknown timezone: auto" for the value
+    the loader documents, which left an operator unable to save what the file
+    already allowed.
+    """
+    if name == AUTO_TIMEZONE:
+        return True
+    try:
+        ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        # A slash-less offset like "GMT+8" can raise either one.
+        return False
+    return True
+
+
 def _int_setting(key: str, value: Any) -> int:
     """A whole number, or a config error that names where it came from."""
     try:
@@ -252,15 +270,11 @@ def _settings_from(raw: dict[str, Any], root: Path) -> Settings:
         raise SystemExit("Missing source.channel_id in config.toml.")
 
     timezone = str(source.get("timezone", DEFAULT_TIMEZONE))
-    if timezone != AUTO_TIMEZONE:
-        try:
-            ZoneInfo(timezone)
-        except (ZoneInfoNotFoundError, ValueError):
-            # A slash-less offset like "GMT+8" can raise either one.
-            raise SystemExit(
-                f'source.timezone: "{timezone}" is not an IANA timezone name '
-                '(try "Asia/Kuala_Lumpur")'
-            ) from None
+    if not is_timezone(timezone):
+        raise SystemExit(
+            f'source.timezone: "{timezone}" is not an IANA timezone name '
+            '(try "Asia/Kuala_Lumpur", or "auto" for the host zone)'
+        )
 
     raw_count_types = source.get("count_types", DEFAULT_COUNT_TYPES)
     if not isinstance(raw_count_types, (list, tuple)) or not all(
