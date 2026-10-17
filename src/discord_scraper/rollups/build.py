@@ -34,6 +34,7 @@ from discord_scraper.rollups.identity import (
     resolve_identities,
 )
 from discord_scraper.rollups.schema import (
+    AUTHOR_FAMILIES,
     FAMILIES,
     create_control_tables,
     create_rollup_tables,
@@ -574,6 +575,15 @@ def rebuild_edit_speed(conn: sqlite3.Connection, cfg: Config, ids: Identities,
 # Resolved through globals() at call time, so a caller (or a test) can replace
 # one family's implementation and rebuild_all picks it up.
 REBUILDER_NAMES: dict[str, str] = {family: f"rebuild_{family}" for family in FAMILIES}
+
+
+def empty_author_rollups(counts: dict[str, int]) -> bool:
+    """True when no family keyed on a person got a row.
+
+    Writing empty rollups is legitimate — the operator may really have excluded
+    everybody — so this is a signal for the caller to explain, not a failure.
+    """
+    return all(counts.get(family, 0) == 0 for family in AUTHOR_FAMILIES)
 
 
 def rebuild_all(conn: sqlite3.Connection, cfg: Config, *, now: str | None = None) -> dict[str, int]:
