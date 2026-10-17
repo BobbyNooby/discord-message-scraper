@@ -281,6 +281,8 @@ def _settings_from(raw: dict[str, Any], root: Path) -> Settings:
     packs = stop.get("packs")
     stop_dir = stop.get("dir")
     if stop_dir:
+        if not isinstance(stop_dir, str):
+            raise SystemExit(f"stopwords.dir: {stop_dir} is not a path")
         # A relative dir belongs to the file it was written in, not to whichever
         # directory the command happened to run from.
         stopword_dir = Path(stop_dir).expanduser()
