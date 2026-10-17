@@ -269,3 +269,109 @@ def test_a_fully_valid_config_still_loads(tmp_path, monkeypatch):
     assert cfg.media_top_n == 0
     assert cfg.media_thumbnails == "off"
     assert cfg.stopword_dir == tmp_path / "stopwords.d"
+
+
+# --- wrong types: refuse them instead of coercing -----------------------------
+#
+# ``bool("no")`` is True and ``bool("false")`` is True, so a hand-edited file
+# asking for one thing silently got the other. ``tuple``/list comprehensions
+# either raised a bare TypeError or exploded a string into characters.
+
+
+@pytest.mark.parametrize("raw,shown", [("5", "5"), ('"ab"', '"ab"')])
+def test_a_count_types_that_is_not_a_list_is_rejected(
+    tmp_path, monkeypatch, raw, shown
+):
+    message = _reject(tmp_path, monkeypatch, f"count_types = {raw}\n")
+    assert message == (
+        f"source.count_types: {shown} is not a list of message types"
+        " (for example [0, 19])"
+    )
+
+
+@pytest.mark.parametrize("raw", ['[0, "19"]', "[true]"])
+def test_count_types_elements_that_are_not_integers_are_rejected(
+    tmp_path, monkeypatch, raw
+):
+    """``bool`` is an ``int`` subclass, but it is not a message type."""
+    message = _reject(tmp_path, monkeypatch, f"count_types = {raw}\n")
+    assert "source.count_types" in message
+    assert "is not a list of message types" in message
+
+
+@pytest.mark.parametrize("raw,shown", [('"no"', '"no"'), ("1", "1")])
+def test_an_exclude_bots_that_is_not_a_boolean_is_rejected(
+    tmp_path, monkeypatch, raw, shown
+):
+    message = _reject(tmp_path, monkeypatch, f"exclude_bots = {raw}\n")
+    assert message == f"source.exclude_bots: {shown} is not true or false"
+
+
+@pytest.mark.parametrize("raw,shown", [('"false"', '"false"'), ("0", "0")])
+def test_a_cron_enabled_that_is_not_a_boolean_is_rejected(
+    tmp_path, monkeypatch, raw, shown
+):
+    message = _reject(tmp_path, monkeypatch, f"[worker]\ncron_enabled = {raw}\n")
+    assert message == f"worker.cron_enabled: {shown} is not true or false"
+
+
+@pytest.mark.parametrize("raw,shown", [('"en"', '"en"'), ("5", "5")])
+def test_a_stopwords_packs_that_is_not_a_list_is_rejected(
+    tmp_path, monkeypatch, raw, shown
+):
+    """A bare string used to be exploded into one pack per character."""
+    message = _reject(tmp_path, monkeypatch, f"[stopwords]\npacks = {raw}\n")
+    assert message == (
+        f"stopwords.packs: {shown} is not a list of pack names"
+        ' (for example ["en"])'
+    )
+
+
+@pytest.mark.parametrize("raw,shown", [('"zonk"', '"zonk"'), ("5", "5")])
+def test_a_stopwords_ignore_that_is_not_a_list_is_rejected(
+    tmp_path, monkeypatch, raw, shown
+):
+    """The same list coercion as ``packs``: ``"zonk"`` became four words."""
+    message = _reject(tmp_path, monkeypatch, f"[stopwords]\nignore = {raw}\n")
+    assert message == f"stopwords.ignore: {shown} is not a list of words"
+
+
+def test_an_identity_value_that_is_not_a_list_is_rejected(tmp_path, monkeypatch):
+    """``alice = "alice_alt"`` split into one account id per character."""
+    message = _reject(tmp_path, monkeypatch, '[identity]\nalice = "alice_alt"\n')
+    assert message == 'identity.alice: "alice_alt" is not a list of account ids'
+
+
+def test_a_non_table_identity_is_rejected(tmp_path, monkeypatch):
+    """``identity = 5`` reached ``.items()`` and left an AttributeError."""
+    monkeypatch.setenv("DISCORD_TOKEN", "t")
+    (tmp_path / "config.toml").write_text(
+        'identity = 5\n[source]\nchannel_id = "1"\n', encoding="utf-8"
+    )
+    with pytest.raises(SystemExit) as exc:
+        load_config(env_path=tmp_path / ".env", config_path=tmp_path / "config.toml")
+    assert str(exc.value) == "identity: 5 is not a table of names"
+
+
+def test_an_unknown_week_start_is_rejected(tmp_path, monkeypatch):
+    message = _reject(tmp_path, monkeypatch, '[ui]\nweek_start = "wednesday"\n')
+    assert message == 'ui.week_start: "wednesday" is not one of: monday, sunday'
+
+
+def test_an_unknown_time_format_is_rejected(tmp_path, monkeypatch):
+    message = _reject(tmp_path, monkeypatch, '[ui]\ntime_format = "13h"\n')
+    assert message == 'ui.time_format: "13h" is not one of: 24h, 12h'
+
+
+def test_correctly_typed_booleans_and_count_types_still_load(tmp_path, monkeypatch):
+    """The refusals must not touch a config that is already right."""
+    monkeypatch.setenv("DISCORD_TOKEN", "t")
+    (tmp_path / "config.toml").write_text(
+        '[source]\nchannel_id = "1"\ncount_types = [0, 19]\nexclude_bots = true\n'
+        "[worker]\ncron_enabled = false\n",
+        encoding="utf-8",
+    )
+    cfg = load_config(env_path=tmp_path / ".env", config_path=tmp_path / "config.toml")
+    assert cfg.count_types == (0, 19)
+    assert cfg.exclude_bots is True
+    assert cfg.cron_enabled is False
