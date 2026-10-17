@@ -229,6 +229,14 @@ def test_a_stopwords_dir_that_does_not_exist_is_rejected(tmp_path, monkeypatch):
     assert "stopwords.dir" in message
 
 
+def test_a_stopwords_dir_that_is_not_a_path_is_rejected(tmp_path, monkeypatch):
+    """An int reached ``Path()`` and left as a TypeError traceback, not a
+    config error — a hand-edited file must fail the way the others do."""
+    message = _reject(tmp_path, monkeypatch, "[stopwords]\ndir = 5\n")
+    assert "stopwords.dir" in message
+    assert "5" in message
+
+
 def test_the_documented_auto_timezone_is_still_accepted(tmp_path, monkeypatch):
     """``timezone = "auto"`` means the host zone (``timeutil.resolve_tz``)."""
     monkeypatch.setenv("DISCORD_TOKEN", "t")
