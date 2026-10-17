@@ -288,27 +288,57 @@ def counted_total(conn, channel_id: str) -> int:
 
 
 def top_media(conn, channel_id: str, limit: int = 24,
-              provider: str | None = None) -> list[list]:
+              provider: str | None = None, kind: str | None = None) -> list[list]:
     """``[[url, provider, kind, title, thumbnail, animated, uses], ...]``.
 
     Ranking everything together means GIFs win every slot, because a GIF gets
     reposted far more than a video link — so the caller can ask for one provider
-    and see YouTube's or Twitter's own top instead.
+    and see YouTube's or Twitter's own top instead. ``kind`` narrows further,
+    and it is a WHERE clause rather than a filter over the page: a client-side
+    filter would only ever sort the fifty rows the limit happened to return.
     """
     where = "channel_id = ?"
     params: list[Any] = [channel_id]
     if provider:
         where += " AND provider = ?"
         params.append(provider)
+    if kind:
+        where += " AND kind = ?"
+        params.append(kind)
     params.append(limit)
     return [
-        [str(url), str(provider_), str(kind), str(title or ""), str(thumbnail or ""),
+        [str(url), str(provider_), str(kind_), str(title or ""), str(thumbnail or ""),
          str(animated or ""), int(uses or 0)]
-        for url, provider_, kind, title, thumbnail, animated, uses in rows(
+        for url, provider_, kind_, title, thumbnail, animated, uses in rows(
             conn,
             f"""
             SELECT url, provider, kind, title, thumbnail, animated, uses FROM rollup_media
              WHERE {where} ORDER BY uses DESC, url LIMIT ?
+            """,
+            tuple(params),
+        )
+    ]
+
+
+def media_kinds(conn, channel_id: str, provider: str | None = None) -> list[str]:
+    """Every kind present for this channel (or one provider), biggest first.
+
+    The chips come from here, not from the page of rows the client already has:
+    a kind that exists only below the limit is still a filter worth offering.
+    """
+    where = "channel_id = ?"
+    params: list[Any] = [channel_id]
+    if provider:
+        where += " AND provider = ?"
+        params.append(provider)
+    return [
+        str(kind)
+        for (kind,) in rows(
+            conn,
+            f"""
+            SELECT kind FROM rollup_media
+             WHERE {where} AND kind <> ''
+             GROUP BY kind ORDER BY SUM(uses) DESC, kind
             """,
             tuple(params),
         )
