@@ -31,7 +31,7 @@ Documentation = "https://github.com/BobbyNooby/discord-message-scraper#readme"
 Source = "https://github.com/BobbyNooby/discord-message-scraper"
 
 [project.optional-dependencies]
-web = ["fastapi", "uvicorn[standard]", "httpx", "itsdangerous", "apscheduler", "python-multipart"]
+web = ["fastapi", "uvicorn[standard]", "httpx", "itsdangerous", "apscheduler", "python-multipart", "authlib"]
 dev = ["pytest"]
 
 [project.scripts]
