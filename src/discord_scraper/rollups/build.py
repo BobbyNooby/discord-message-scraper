@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import time
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -586,12 +587,60 @@ def empty_author_rollups(counts: dict[str, int]) -> bool:
     return all(counts.get(family, 0) == 0 for family in AUTHOR_FAMILIES)
 
 
-def rebuild_all(conn: sqlite3.Connection, cfg: Config, *, now: str | None = None) -> dict[str, int]:
+# How many progress rows survive. A rebuild writes ~32 (a run pair plus one pair
+# per family), so this is roughly the last fifteen rebuilds — plenty for "what
+# just happened", and a hard ceiling on a table the worker writes forever.
+EVENTS_KEEP = 500
+
+
+def prune_rebuild_events(conn: sqlite3.Connection, keep: int = EVENTS_KEEP) -> int:
+    """Drop all but the newest ``keep`` progress rows. Returns how many went."""
+    cursor = conn.execute(
+        "DELETE FROM rebuild_events WHERE id NOT IN "
+        "(SELECT id FROM rebuild_events ORDER BY id DESC LIMIT ?)",
+        (int(keep),),
+    )
+    return int(cursor.rowcount or 0)
+
+
+def _record_events(conn: sqlite3.Connection, events: Iterable[tuple]) -> None:
+    """Append progress rows and prune, in one transaction.
+
+    Deliberately a plain function on the rebuild's own connection: the events
+    are evidence about a rebuild, not part of its atomic rollup write, so a
+    failed write must still leave the log behind.
+    """
+    conn.executemany(
+        "INSERT INTO rebuild_events "
+        "(started_at, finished_at, kind, family, phase, message, rows, seconds) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        list(events),
+    )
+    prune_rebuild_events(conn)
+    conn.commit()
+
+
+def _iso_now() -> str:
+    return datetime.now().astimezone().isoformat(timespec="microseconds")
+
+
+def rebuild_all(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    now: str | None = None,
+    on_phase: Callable[[str], None] | None = None,
+) -> dict[str, int]:
     """Rebuild every family for this channel.
 
     Derivation happens outside the transaction and the writes inside it: the
     rollups either all land or none do, and the write lock is held for the
     inserts rather than for the reading.
+
+    ``on_phase`` is called as the rebuild moves between phases (``deriving``,
+    ``writing``, ``finished``, ``failed``) so a caller with a job row can say
+    what an in-flight rebuild is doing. The CLI passes nothing and its output is
+    unchanged.
     """
     create_rollup_tables(conn)
     create_control_tables(conn)   # author_names lives with the control plane
@@ -602,32 +651,94 @@ def rebuild_all(conn: sqlite3.Connection, cfg: Config, *, now: str | None = None
     stamp = now or datetime.now().astimezone().isoformat(timespec="microseconds")
     config_hash = config_digest(cfg, conn)
 
-    derived = derive(conn, cfg, ids)
+    def phase(name: str) -> None:
+        if on_phase is not None:
+            on_phase(name)
 
-    counts: dict[str, int] = {}
-    # A savepoint rather than BEGIN: the caller may already be inside a
-    # transaction (a job runner, a test), where a nested BEGIN raises.
-    conn.execute("SAVEPOINT rollup_rebuild")
+    # Committed on its own, before the long derive: while a rebuild is running
+    # this row is the only thing the board has to read, so it cannot wait for
+    # the rollup transaction to end.
+    run_clock = time.monotonic()
+    _record_events(conn, [(stamp, None, "run", None, "started", "rebuild started", None, None)])
+
     try:
-        store_author_names(conn, cfg, ids)
-        write_stats(conn, cfg.channel_id, derived)
-        for family in FAMILIES:
-            counts[family] = globals()[REBUILDER_NAMES[family]](conn, cfg, ids, derived)
-            set_provenance(
-                conn, cfg.channel_id, family,
-                computed_at=stamp,
-                source_max_id=derived.source_max,
-                source_count=derived.source_count,
-                timezone=cfg.timezone,
-                config_hash=config_hash,
-            )
-    except BaseException:
-        conn.execute("ROLLBACK TO rollup_rebuild")
+        phase("deriving")
+        derived = derive(conn, cfg, ids)
+
+        # Mark every family in flight before the write transaction opens. It is
+        # committed a moment early, but it is what makes a poll during the write
+        # phase see work rather than a blank list. The finished rows below carry
+        # the real row count and the seconds each family took.
+        phase("writing")
+        _record_events(conn, [
+            (_iso_now(), None, "family", family, "started", f"{family} started", None, None)
+            for family in FAMILIES
+        ])
+
+        counts: dict[str, int] = {}
+        family_seconds: dict[str, tuple[str, float]] = {}
+        # A savepoint rather than BEGIN: the caller may already be inside a
+        # transaction (a job runner, a test), where a nested BEGIN raises.
+        conn.execute("SAVEPOINT rollup_rebuild")
+        try:
+            store_author_names(conn, cfg, ids)
+            write_stats(conn, cfg.channel_id, derived)
+            for family in FAMILIES:
+                family_start = time.monotonic()
+                family_at = _iso_now()
+                counts[family] = globals()[REBUILDER_NAMES[family]](conn, cfg, ids, derived)
+                family_seconds[family] = (family_at, time.monotonic() - family_start)
+                set_provenance(
+                    conn, cfg.channel_id, family,
+                    computed_at=stamp,
+                    source_max_id=derived.source_max,
+                    source_count=derived.source_count,
+                    timezone=cfg.timezone,
+                    config_hash=config_hash,
+                )
+        except BaseException:
+            conn.execute("ROLLBACK TO rollup_rebuild")
+            conn.execute("RELEASE rollup_rebuild")
+            raise
         conn.execute("RELEASE rollup_rebuild")
+        conn.commit()
+    except BaseException as exc:
+        # A failed rebuild that left no trace is the silent failure this log
+        # exists to prevent, so record it and then re-raise unchanged.
+        _record_failure(conn, stamp, run_clock, exc)
+        try:
+            phase("failed")
+        except Exception:
+            pass
         raise
-    conn.execute("RELEASE rollup_rebuild")
-    conn.commit()
+
+    finished_at = _iso_now()
+    total_rows = sum(counts.values())
+    elapsed = time.monotonic() - run_clock
+    _record_events(conn, [
+        (family_seconds[family][0], finished_at, "family", family, "finished",
+         f"{family} {counts[family]} rows rebuilt", counts[family],
+         round(family_seconds[family][1], 3))
+        for family in FAMILIES
+    ] + [
+        (stamp, finished_at, "run", None, "finished",
+         f"{total_rows} rows rebuilt in {elapsed:.1f}s", total_rows, round(elapsed, 3)),
+    ])
+    phase("finished")
     return counts
+
+
+def _record_failure(conn: sqlite3.Connection, stamp: str, run_clock: float,
+                    exc: BaseException) -> None:
+    """Log a failed run. Never masks the original exception."""
+    try:
+        _record_events(conn, [(
+            stamp, _iso_now(), "run", None, "failed",
+            f"rebuild failed: {type(exc).__name__}: {exc}", None,
+            round(time.monotonic() - run_clock, 3),
+        )])
+    except sqlite3.Error:
+        pass
 
 
 BUILDERS: dict[str, Callable[..., int]] = {
