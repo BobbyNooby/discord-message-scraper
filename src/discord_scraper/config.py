@@ -34,6 +34,10 @@ MAX_CRON_HOURS = 24
 # extra, and these two strings are the contract the auth layer reads.
 ALLOWLIST_MODES = ("posted", "explicit")
 THUMBNAIL_MODES = ("proxy", "direct", "off")
+# ``ui`` values with a closed vocabulary: the example file names the only
+# alternative, so anything else is a typo the operator wants to hear about.
+WEEK_START_DAYS = ("monday", "sunday")
+TIME_FORMATS = ("24h", "12h")
 
 
 @dataclass(frozen=True)
@@ -218,6 +222,22 @@ def _int_setting(key: str, value: Any) -> int:
         raise SystemExit(f'{key}: "{value}" is not a whole number') from None
 
 
+def _display(value: Any) -> str:
+    """A value as it appears in a config error: a string keeps its quotes."""
+    return f'"{value}"' if isinstance(value, str) else str(value)
+
+
+def _bool_setting(key: str, value: Any) -> bool:
+    """A real boolean.
+
+    ``bool("no")`` and ``bool("false")`` are both True, so a quoted string in a
+    hand-edited file used to mean the opposite of what it said.
+    """
+    if not isinstance(value, bool):
+        raise SystemExit(f"{key}: {_display(value)} is not true or false")
+    return value
+
+
 def _settings_from(raw: dict[str, Any], root: Path) -> Settings:
     app = raw.get("app", {})
     source = raw.get("source", {})
@@ -242,11 +262,23 @@ def _settings_from(raw: dict[str, Any], root: Path) -> Settings:
                 '(try "Asia/Kuala_Lumpur")'
             ) from None
 
-    count_types = tuple(source.get("count_types", DEFAULT_COUNT_TYPES))
+    raw_count_types = source.get("count_types", DEFAULT_COUNT_TYPES)
+    if not isinstance(raw_count_types, (list, tuple)) or not all(
+        isinstance(t, int) and not isinstance(t, bool) for t in raw_count_types
+    ):
+        raise SystemExit(
+            f"source.count_types: {_display(raw_count_types)} is not a list of "
+            "message types (for example [0, 19])"
+        )
+    count_types = tuple(raw_count_types)
     if not count_types:
         raise SystemExit(
             "source.count_types: needs at least one message type (for example [0, 19])"
         )
+
+    exclude_bots = _bool_setting(
+        "source.exclude_bots", source.get("exclude_bots", True)
+    )
 
     cron_hours = _int_setting("worker.cron_hours", worker.get("cron_hours", 6))
     if not MIN_CRON_HOURS <= cron_hours <= MAX_CRON_HOURS:
@@ -278,7 +310,23 @@ def _settings_from(raw: dict[str, Any], root: Path) -> Settings:
             f'access.allowlist: "{allowlist}" is not one of: ' + ", ".join(ALLOWLIST_MODES)
         )
 
-    packs = stop.get("packs")
+    packs = stop.get("packs", ["en"])
+    if not isinstance(packs, (list, tuple)) or not all(
+        isinstance(p, str) for p in packs
+    ):
+        raise SystemExit(
+            f"stopwords.packs: {_display(packs)} is not a list of pack names "
+            '(for example ["en"])'
+        )
+
+    ignore = stop.get("ignore", [])
+    if not isinstance(ignore, (list, tuple)) or not all(
+        isinstance(w, str) for w in ignore
+    ):
+        raise SystemExit(
+            f"stopwords.ignore: {_display(ignore)} is not a list of words"
+        )
+
     stop_dir = stop.get("dir")
     if stop_dir:
         if not isinstance(stop_dir, str):
@@ -295,22 +343,50 @@ def _settings_from(raw: dict[str, Any], root: Path) -> Settings:
     else:
         stopword_dir = root / "stopwords.d"
 
+    week_start = str(ui.get("week_start", "monday"))
+    if week_start not in WEEK_START_DAYS:
+        raise SystemExit(
+            f'ui.week_start: "{week_start}" is not one of: ' + ", ".join(WEEK_START_DAYS)
+        )
+
+    time_format = str(ui.get("time_format", "24h"))
+    if time_format not in TIME_FORMATS:
+        raise SystemExit(
+            f'ui.time_format: "{time_format}" is not one of: ' + ", ".join(TIME_FORMATS)
+        )
+
+    identity_raw = raw.get("identity", {})
+    if not isinstance(identity_raw, dict):
+        raise SystemExit(f"identity: {_display(identity_raw)} is not a table of names")
+    identities: dict[str, list[str]] = {}
+    for name, accounts in identity_raw.items():
+        if not isinstance(accounts, (list, tuple)) or not all(
+            isinstance(a, str) for a in accounts
+        ):
+            raise SystemExit(
+                f"identity.{name}: {_display(accounts)} is not a list of account ids"
+            )
+        identities[str(name)] = [str(a) for a in accounts]
+
+    cron_enabled = _bool_setting(
+        "worker.cron_enabled", worker.get("cron_enabled", True)
+    )
+
     return Settings(
         channel_id=channel_id,
         app_name=str(app.get("name", DEFAULT_APP_NAME)),
         timezone=timezone,
         count_types=count_types,
-        exclude_bots=bool(source.get("exclude_bots", True)),
+        exclude_bots=exclude_bots,
         batch_size=normalize_batch_size(source.get("batch_size", BATCH_SIZE)),
-        stopword_packs=[str(p) for p in packs] if packs else ["en"],
+        stopword_packs=list(packs) if packs else ["en"],
         stopword_dir=stopword_dir,
-        ignore_words=[str(w) for w in stop.get("ignore", [])],
-        identities={str(k): [str(a) for a in v]
-                    for k, v in raw.get("identity", {}).items()},
-        cron_enabled=bool(worker.get("cron_enabled", True)),
+        ignore_words=list(ignore),
+        identities=identities,
+        cron_enabled=cron_enabled,
         cron_hours=cron_hours,
-        week_start=str(ui.get("week_start", "monday")),
-        time_format=str(ui.get("time_format", "24h")),
+        week_start=week_start,
+        time_format=time_format,
         show_recent=show_recent,
         media_top_n=media_top_n,
         media_thumbnails=media_thumbnails,
