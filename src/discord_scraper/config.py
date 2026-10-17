@@ -46,6 +46,7 @@ class Secrets:
 
     token: str
     client_secret: str | None = None
+    client_id: str | None = None
     session_secret: str | None = None
     admin_id: str | None = None
 
@@ -173,7 +174,9 @@ class Config:
 
     @property
     def client_id(self) -> str:
-        return self.settings.client_id
+        # Public by design, so it may live in the config file or the
+        # environment. The file wins when both are set.
+        return self.settings.client_id or self.secrets.client_id or ""
 
     @property
     def redirect_uri(self) -> str:
@@ -209,6 +212,7 @@ def _secrets_from(env: dict[str, str], *, require_token: bool = True) -> Secrets
     return Secrets(
         token=token or "",
         client_secret=env.get("DISCORD_CLIENT_SECRET") or None,
+        client_id=env.get("DISCORD_CLIENT_ID") or None,
         session_secret=env.get("SESSION_SECRET") or None,
         admin_id=env.get("ADMIN_DISCORD_ID") or None,
     )
