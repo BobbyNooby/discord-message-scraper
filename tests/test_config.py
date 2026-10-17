@@ -386,3 +386,29 @@ def test_the_timezone_predicate_agrees_with_the_loader():
     assert is_timezone("Asia/Kuala_Lumpur")
     assert not is_timezone("GMT+8")
     assert not is_timezone("Mars/Olympus")
+
+
+def test_the_client_id_may_come_from_the_environment(tmp_path, monkeypatch):
+    """The secret lives in .env, so it is natural to put the id beside it."""
+    from discord_scraper.config import load_config
+
+    monkeypatch.setenv("DISCORD_CLIENT_ID", "1241878440773156915")
+    (tmp_path / ".env").write_text("DISCORD_TOKEN=t\nDISCORD_CLIENT_SECRET=s\n", encoding="utf-8")
+    (tmp_path / "config.toml").write_text(
+        '[source]\nchannel_id = "c1"\n[access]\nclient_id = ""\nredirect_uri = "https://x/cb"\n',
+        encoding="utf-8",
+    )
+    cfg = load_config(env_path=tmp_path / ".env", config_path=tmp_path / "config.toml")
+    assert cfg.client_id == "1241878440773156915"
+
+
+def test_the_config_file_still_wins_over_the_environment(tmp_path, monkeypatch):
+    from discord_scraper.config import load_config
+
+    monkeypatch.setenv("DISCORD_CLIENT_ID", "from-the-environment")
+    (tmp_path / ".env").write_text("DISCORD_TOKEN=t\n", encoding="utf-8")
+    (tmp_path / "config.toml").write_text(
+        '[source]\nchannel_id = "c1"\n[access]\nclient_id = "from-the-config"\n', encoding="utf-8"
+    )
+    cfg = load_config(env_path=tmp_path / ".env", config_path=tmp_path / "config.toml")
+    assert cfg.client_id == "from-the-config"
