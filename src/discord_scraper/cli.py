@@ -194,7 +194,7 @@ def _rollups_rebuild(args) -> int:
     from pathlib import Path
 
     from discord_scraper.config import PROJECT_DIR, config_from_settings, load_settings
-    from discord_scraper.rollups.build import rebuild_all
+    from discord_scraper.rollups.build import empty_author_rollups, rebuild_all
     from discord_scraper.rollups.schema import FAMILIES
 
     if not Path(args.db).exists():
@@ -218,6 +218,14 @@ def _rollups_rebuild(args) -> int:
     width = max(len(family) for family in FAMILIES)
     for family in FAMILIES:
         _report(family, width, counts[family], "rebuilt")
+    if empty_author_rollups(counts):
+        # The rebuild is legitimate, so it still exits 0; but every panel keyed
+        # on a person is now blank, and the operator deserves to be told why.
+        print(
+            "warning: no author rows were written — every message is excluded by "
+            "source.count_types, exclude_bots or a hidden identity",
+            file=sys.stderr,
+        )
     return 0
 
 

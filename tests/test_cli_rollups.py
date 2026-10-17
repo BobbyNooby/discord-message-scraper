@@ -44,6 +44,48 @@ def test_rebuild_writes_rows_and_reports_counts(seeded_db_path, tmp_path, capsys
         conn.close()
 
 
+def _hide_every_author(path):
+    """Every author switched off the way the admin board writes it (§5.6)."""
+    from discord_scraper.rollups.schema import create_control_tables, create_rollup_tables
+
+    conn = sqlite3.connect(path)
+    try:
+        create_rollup_tables(conn)
+        create_control_tables(conn)
+        conn.executemany(
+            "INSERT INTO author_names (channel_id, author_id, name, renamed, included) "
+            "VALUES ('c1', ?, ?, 0, 0)",
+            [(row[0], row[0]) for row in conn.execute(
+                "SELECT DISTINCT author_id FROM messages WHERE channel_id = 'c1'")],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_a_rebuild_that_excluded_every_author_says_so(seeded_db_path, tmp_path, capsys):
+    """Every panel goes blank when nobody is left: that has to be explained."""
+    cfg_fixture(tmp_path)
+    _hide_every_author(seeded_db_path)
+    assert main(["rollups", "rebuild", "--db", str(seeded_db_path),
+                 "--config", str(tmp_path / "config.toml")]) == 0
+    captured = capsys.readouterr()
+    assert "no author rows" in captured.err.lower()
+    assert "count_types" in captured.err
+    assert "exclude_bots" in captured.err
+    assert "hidden" in captured.err.lower()
+    assert "activity" in captured.out        # the per-family report still runs
+
+
+def test_an_ordinary_rebuild_stays_quiet(seeded_db_path, tmp_path, capsys):
+    cfg_fixture(tmp_path)
+    assert main(["rollups", "rebuild", "--db", str(seeded_db_path),
+                 "--config", str(tmp_path / "config.toml")]) == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert "activity" in captured.out
+
+
 def test_rebuild_accepts_an_explicit_channel(seeded_db_path, tmp_path, capsys):
     cfg_fixture(tmp_path)
     assert main(["rollups", "rebuild", "--db", str(seeded_db_path), "--channel", "c1",

@@ -34,6 +34,25 @@ FAMILIES: tuple[str, ...] = (
 
 ROLLUP_TABLES: tuple[str, ...] = tuple(f"rollup_{family}" for family in FAMILIES)
 
+# The families whose rows are keyed on a person. `type` is not one of them: it
+# counts message types and is derived before the identity filter, so it stays
+# non-empty when every author is excluded — which is exactly why "nothing was
+# written at all" is the wrong test for "every panel is blank".
+AUTHOR_FAMILIES: tuple[str, ...] = (
+    "activity",
+    "heat",
+    "reply",
+    "word",
+    "link",
+    "provider",
+    "emoji",
+    "reaction",
+    "attachment",
+    "response",
+    "starter",
+    "edit_speed",
+)
+
 ROLLUP_DDL = """
 CREATE TABLE IF NOT EXISTS rollup_activity (
   channel_id TEXT NOT NULL,
