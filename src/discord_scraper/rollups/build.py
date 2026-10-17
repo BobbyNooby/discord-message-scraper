@@ -642,27 +642,32 @@ def rebuild_all(
     what an in-flight rebuild is doing. The CLI passes nothing and its output is
     unchanged.
     """
-    create_rollup_tables(conn)
+    # The control plane owns `rebuild_events`, so it has to exist before the run
+    # can be logged. Everything else in the prelude — the rollup tables, the
+    # identity resolution, the config hash — takes tens of seconds on a real
+    # database, and the run must be visible for all of it rather than only once
+    # the derive begins.
     create_control_tables(conn)   # author_names lives with the control plane
-    ids = resolve_identities(conn, cfg)
     # Microseconds, not seconds: the API caches its payload keyed on provenance,
     # and two rebuilds inside the same second would otherwise be indistinguishable
     # — which is exactly how a stale payload gets served after a rebuild.
     stamp = now or datetime.now().astimezone().isoformat(timespec="microseconds")
-    config_hash = config_digest(cfg, conn)
 
     def phase(name: str) -> None:
         if on_phase is not None:
             on_phase(name)
 
-    # Committed on its own, before the long derive: while a rebuild is running
-    # this row is the only thing the board has to read, so it cannot wait for
-    # the rollup transaction to end.
+    # Committed on its own, before the prelude and the long derive: while a
+    # rebuild is running this row is the only thing the board has to read, so it
+    # cannot wait for the rollup transaction to end.
     run_clock = time.monotonic()
     _record_events(conn, [(stamp, None, "run", None, "started", "rebuild started", None, None)])
 
     try:
         phase("deriving")
+        create_rollup_tables(conn)
+        ids = resolve_identities(conn, cfg)
+        config_hash = config_digest(cfg, conn)
         derived = derive(conn, cfg, ids)
 
         # Mark every family in flight before the write transaction opens. It is
