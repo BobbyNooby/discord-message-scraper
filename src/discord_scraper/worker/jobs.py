@@ -64,8 +64,15 @@ def _ingest(conn: sqlite3.Connection, cfg: Config, kind: str) -> str:
     return f"{kind}: {added} messages added"
 
 
-def _rebuild(conn: sqlite3.Connection, cfg: Config) -> str:
-    counts = rebuild_all(conn, cfg)
+def set_job_phase(conn: sqlite3.Connection, job_id: int, phase: str) -> None:
+    """Say what an in-flight job is doing, beside its ``running`` status."""
+    conn.execute("UPDATE jobs SET phase = ? WHERE id = ?", (str(phase), int(job_id)))
+    conn.commit()
+
+
+def _rebuild(conn: sqlite3.Connection, cfg: Config,
+             on_phase: Callable[[str], None] | None = None) -> str:
+    counts = rebuild_all(conn, cfg, on_phase=on_phase)
     return f"rebuilt {len(counts)} families"
 
 
@@ -105,17 +112,26 @@ def run_job(
         if kind == "probe" and get is not None:
             alive, status = probe_token(conn, cfg.token, get=get)
             result = f"probe: HTTP {status}, token {'alive' if alive else 'not alive'}"
+        elif kind == "rebuild_rollups":
+            # A rebuild is the only job that runs for a minute, so it is the one
+            # whose phase is worth persisting while it is in flight.
+            result = _rebuild(
+                conn, cfg,
+                on_phase=lambda phase: set_job_phase(conn, job["id"], phase),
+            )
         else:
             result = handler(conn, cfg)
     except Exception as exc:
         conn.execute(
-            "UPDATE jobs SET status = 'failed', finished_at = ?, error = ? WHERE id = ?",
+            "UPDATE jobs SET status = 'failed', finished_at = ?, phase = 'failed', "
+            "error = ? WHERE id = ?",
             (_now(), f"{type(exc).__name__}: {exc}", job["id"]),
         )
         conn.commit()
         raise
     conn.execute(
-        "UPDATE jobs SET status = 'done', finished_at = ?, result = ? WHERE id = ?",
+        "UPDATE jobs SET status = 'done', finished_at = ?, phase = 'finished', "
+        "result = ? WHERE id = ?",
         (_now(), result, job["id"]),
     )
     conn.commit()

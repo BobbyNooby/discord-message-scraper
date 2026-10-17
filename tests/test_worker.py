@@ -155,6 +155,45 @@ def test_run_job_rebuild_writes_rollups_and_completes(two_conns, cfg):
     assert "15" in row["result"]
 
 
+def test_run_job_rebuild_records_its_final_phase(two_conns, cfg):
+    """A rebuild is the one long job, so it says more than "running"."""
+    conn, other = two_conns
+    enqueue(conn, "c1", "rebuild_rollups")
+    job = claim_next(conn)
+    run_job(conn, cfg, job)
+    row = other.execute("SELECT status, phase FROM jobs").fetchone()
+    assert row["status"] == "done"
+    assert row["phase"] == "finished"
+
+
+def test_set_job_phase_is_visible_to_another_connection(two_conns):
+    from discord_scraper.worker.jobs import set_job_phase
+
+    conn, other = two_conns
+    enqueue(conn, "c1", "rebuild_rollups")
+    job = claim_next(conn)
+    set_job_phase(conn, job["id"], "deriving")
+    assert other.execute("SELECT phase FROM jobs").fetchone()["phase"] == "deriving"
+
+
+def test_a_failing_rebuild_job_records_the_failed_phase(two_conns, cfg, monkeypatch):
+    import discord_scraper.rollups.build as build
+
+    conn, other = two_conns
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("mid-rebuild")
+
+    monkeypatch.setattr(build, "rebuild_word", boom)
+    enqueue(conn, "c1", "rebuild_rollups")
+    job = claim_next(conn)
+    with pytest.raises(RuntimeError):
+        run_job(conn, cfg, job)
+    row = other.execute("SELECT status, phase FROM jobs").fetchone()
+    assert row["status"] == "failed"
+    assert row["phase"] == "failed"
+
+
 def test_run_job_failure_is_recorded_and_raised(two_conns, cfg, monkeypatch):
     conn, other = two_conns
     from discord_scraper.worker import jobs as jobs_module
