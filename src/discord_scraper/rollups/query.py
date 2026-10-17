@@ -11,6 +11,9 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
+from discord_scraper.config import Config
+from discord_scraper.rollups import identity
+
 FAMILIES_ORDERED: tuple[str, ...] = (
     "activity", "heat", "reply", "word", "link", "provider", "embed_type",
     "emoji", "reaction", "attachment", "response", "starter", "edit_speed", "type",
@@ -57,14 +60,25 @@ def days(conn: sqlite3.Connection, channel_id: str) -> list[str]:
     )]
 
 
-def authors(conn: sqlite3.Connection, channel_id: str) -> list[dict[str, Any]]:
-    """Authors in the same order as every ``author_id``-keyed rollup's index.
+def authors(conn: sqlite3.Connection, channel_id: str,
+            cfg: Config | None = None) -> list[dict[str, Any]]:
+    """Canonical authors in the same order as every ``author_id``-keyed rollup.
+
+    A rollup row is keyed by whichever account sent the message, so an
+    un-rebuilt table can still carry a merged-away alt and present one person
+    twice. Here each account is folded into its canonical id and the volumes are
+    summed, so the list is canonical-only no matter what state the tables are in
+    (spec §5.5). ``accounts`` records every raw id folded into the row, and
+    callers build their author index from it so an alt's cells still land on the
+    canonical's index.
 
     Ordered by message volume, then id, because the frontend colours series by
     position and a rebuild must not reshuffle the palette. Names come from
     ``author_names`` — never from ``messages``, which a request must not scan.
     """
+    merge = identity.canonical_map(conn, channel_id, cfg)
     totals: dict[str, int] = {}
+    account_msgs: dict[str, int] = {}
     for author_id, msgs in rows(
         conn,
         """
@@ -73,46 +87,78 @@ def authors(conn: sqlite3.Connection, channel_id: str) -> list[dict[str, Any]]:
         """,
         (channel_id,),
     ):
-        totals[author_id] = int(msgs)
-    names = dict(rows(
+        account_msgs[author_id] = int(msgs)
+        canonical = merge.get(author_id, author_id)
+        totals[canonical] = totals.get(canonical, 0) + int(msgs)
+
+    stored_names = dict(rows(
         conn, "SELECT author_id, name FROM author_names WHERE channel_id = ?", (channel_id,)
     ))
-    members: dict[str, list[str]] = {}
-    for account, canonical in rows(
-        conn,
-        "SELECT account_id, canonical_id FROM identity WHERE channel_id = ? ORDER BY account_id",
-        (channel_id,),
-    ):
-        members.setdefault(canonical, []).append(account)
+    members: dict[str, set[str]] = {canonical: {canonical} for canonical in totals}
+    for account, canonical in merge.items():
+        if canonical in members:
+            members[canonical].add(account)
+
+    def display_name(canonical: str) -> str:
+        if canonical in stored_names:
+            return stored_names[canonical]
+        # No row for the canonical itself: borrow the busiest alias's name
+        # rather than showing a snowflake.
+        aliases = sorted((a for a in members[canonical] if a in stored_names),
+                         key=lambda a: (-account_msgs.get(a, 0), a))
+        return stored_names[aliases[0]] if aliases else canonical
+
     ordered = sorted(totals, key=lambda who: (-totals[who], who))
     return [
         {
             "id": who,
-            "name": names.get(who, who),
+            "name": display_name(who),
             "msgs": totals[who],
-            "accounts": [who, *[a for a in members.get(who, []) if a != who]],
+            "accounts": [who, *sorted(a for a in members[who] if a != who)],
         }
         for who in ordered
     ]
 
 
+def author_index(author_rows: list[dict[str, Any]]) -> dict[str, int]:
+    """``account_id -> row`` for every account folded into each canonical row.
+
+    Built from ``authors``' ``accounts`` rather than from the identity table
+    again, so the index is exactly as wide as the list the caller will render.
+    """
+    return {
+        account: index
+        for index, row in enumerate(author_rows)
+        for account in row["accounts"]
+    }
+
+
 def activity_cells(conn, channel_id: str, day_index: dict[str, int], author_index: dict[str, int]):
-    return [
-        [day_index[day], author_index[author_id], msgs, chars, replies, media, edits]
-        for day, author_id, msgs, chars, media, edits, replies in rows(
-            conn,
-            """
-            SELECT day, author_id, msgs, chars, media, edits, replies
-              FROM rollup_activity WHERE channel_id = ? ORDER BY day, author_id
-            """,
-            (channel_id,),
-        )
-        if day in day_index and author_id in author_index
-    ]
+    # Author rows can share a canonical index when the tables predate a merge,
+    # so cells are summed per (day, author) instead of shipped twice.
+    combined: dict[tuple[int, int], list[int]] = {}
+    for day, author_id, msgs, chars, media, edits, replies in rows(
+        conn,
+        """
+        SELECT day, author_id, msgs, chars, media, edits, replies
+          FROM rollup_activity WHERE channel_id = ? ORDER BY day, author_id
+        """,
+        (channel_id,),
+    ):
+        if day not in day_index or author_id not in author_index:
+            continue
+        key = (day_index[day], author_index[author_id])
+        cell = combined.setdefault(key, [0, 0, 0, 0, 0])
+        cell[0] += msgs        # msgs
+        cell[1] += chars       # chars
+        cell[2] += replies     # replies
+        cell[3] += media       # media
+        cell[4] += edits       # edits
+    return [[day, author, *counts] for (day, author), counts in combined.items()]
 
 
 def heat_cells(conn, channel_id: str, author_index: dict[str, int]):
-    output = []
+    combined: dict[tuple[int, int, int, int], int] = {}
     for year, dow, hour, author_id, msgs in rows(
         conn,
         """
@@ -121,28 +167,36 @@ def heat_cells(conn, channel_id: str, author_index: dict[str, int]):
         """,
         (channel_id,),
     ):
-        if author_id in author_index:
-            output.append([dow, hour, author_index[author_id], year, msgs])
-    return output
+        if author_id not in author_index:
+            continue
+        key = (dow, hour, author_index[author_id], year)
+        combined[key] = combined.get(key, 0) + msgs
+    return [[dow, hour, author, year, msgs]
+            for (dow, hour, author, year), msgs in combined.items()]
 
 
 def reply_edges(conn, channel_id: str, author_index: dict[str, int]):
-    return [
-        [author_index[parent], author_index[child], msgs]
-        for parent, child, msgs in rows(
-            conn,
-            """
-            SELECT parent_author_id, child_author_id, msgs FROM rollup_reply
-             WHERE channel_id = ? ORDER BY parent_author_id, child_author_id
-            """,
-            (channel_id,),
-        )
-        if parent in author_index and child in author_index
-    ]
+    combined: dict[tuple[int, int], int] = {}
+    for parent, child, msgs in rows(
+        conn,
+        """
+        SELECT parent_author_id, child_author_id, msgs FROM rollup_reply
+         WHERE channel_id = ? ORDER BY parent_author_id, child_author_id
+        """,
+        (channel_id,),
+    ):
+        if parent not in author_index or child not in author_index:
+            continue
+        key = (author_index[parent], author_index[child])
+        combined[key] = combined.get(key, 0) + msgs
+    return [[parent, child, msgs] for (parent, child), msgs in combined.items()]
 
 
 def response_times(conn, channel_id: str, author_index: dict[str, int]):
-    output = []
+    # Seconds and replies are summed before the average is taken: averaging two
+    # already-rounded averages would be wrong the moment a merge splits a
+    # person across accounts.
+    combined: dict[int, list[int]] = {}
     for author_id, replies, seconds, capped in rows(
         conn,
         """
@@ -151,13 +205,17 @@ def response_times(conn, channel_id: str, author_index: dict[str, int]):
         """,
         (channel_id,),
     ):
-        if author_id in author_index and replies:
-            output.append([author_index[author_id], round(seconds / replies, 1), replies])
-    return output
+        if author_id not in author_index or not replies:
+            continue
+        cell = combined.setdefault(author_index[author_id], [0, 0])
+        cell[0] += seconds
+        cell[1] += replies
+    return [[author, round(seconds / replies, 1), replies]
+            for author, (seconds, replies) in combined.items()]
 
 
 def edit_speeds(conn, channel_id: str, author_index: dict[str, int]):
-    output = []
+    combined: dict[int, list[int]] = {}
     for author_id, edits, seconds, capped in rows(
         conn,
         """
@@ -166,32 +224,51 @@ def edit_speeds(conn, channel_id: str, author_index: dict[str, int]):
         """,
         (channel_id,),
     ):
-        if author_id in author_index and edits:
-            output.append([author_index[author_id], round(seconds / edits, 1), edits])
-    return output
+        if author_id not in author_index or not edits:
+            continue
+        cell = combined.setdefault(author_index[author_id], [0, 0])
+        cell[0] += seconds
+        cell[1] += edits
+    return [[author, round(seconds / edits, 1), edits]
+            for author, (seconds, edits) in combined.items()]
 
 
 def starters(conn, channel_id: str, author_index: dict[str, int]):
-    return [
-        [author_index[author_id], count]
-        for author_id, count in rows(
-            conn,
-            "SELECT author_id, starters FROM rollup_starter WHERE channel_id = ? ORDER BY author_id",
-            (channel_id,),
-        )
-        if author_id in author_index
-    ]
+    combined: dict[int, int] = {}
+    for author_id, count in rows(
+        conn,
+        "SELECT author_id, starters FROM rollup_starter WHERE channel_id = ? ORDER BY author_id",
+        (channel_id,),
+    ):
+        if author_id not in author_index:
+            continue
+        index = author_index[author_id]
+        combined[index] = combined.get(index, 0) + count
+    return [[author, count] for author, count in combined.items()]
 
 
-def word_rows(conn, channel_id: str) -> list[tuple[str, int, str, int]]:
-    return rows(
+def word_author_uses(conn, channel_id: str,
+                     author_index: dict[str, int]) -> dict[tuple[str, int], int]:
+    """``(word, author) -> uses`` with each author folded to its canonical index.
+
+    Two accounts of one person can each have a row for the same word; those
+    combine, so the per-word breakdown cannot count the person twice.
+    """
+    combined: dict[tuple[str, int], int] = {}
+    for word, author_id, uses in rows(
         conn,
         """
-        SELECT word, SUM(uses), author_id, SUM(uses) FROM rollup_word
-         WHERE channel_id = ? GROUP BY word, author_id ORDER BY word, author_id
+        SELECT word, author_id, SUM(uses) FROM rollup_word
+         WHERE channel_id = ? GROUP BY word, author_id
         """,
         (channel_id,),
-    )
+    ):
+        index = author_index.get(author_id)
+        if index is None:
+            continue
+        key = (word, index)
+        combined[key] = combined.get(key, 0) + int(uses)
+    return combined
 
 
 def top_words(conn, channel_id: str, limit: int = 500) -> list[tuple[str, int]]:
@@ -206,14 +283,25 @@ def top_words(conn, channel_id: str, limit: int = 500) -> list[tuple[str, int]]:
 
 
 def words_for(conn, channel_id: str, word: str) -> list[tuple[str, int]]:
-    return rows(
+    """``[(canonical_author, uses), ...]``, biggest first.
+
+    Canonical for the same reason as ``authors``: ``/api/words`` names its
+    results through ``authors``, so an alt id left in this list would fall back
+    to a raw snowflake instead of the person it was merged into.
+    """
+    merge = identity.canonical_map(conn, channel_id)
+    combined: dict[str, int] = {}
+    for author_id, uses in rows(
         conn,
         """
         SELECT author_id, SUM(uses) FROM rollup_word
-         WHERE channel_id = ? AND word = ? GROUP BY author_id ORDER BY SUM(uses) DESC
+         WHERE channel_id = ? AND word = ? GROUP BY author_id
         """,
         (channel_id, word),
-    )
+    ):
+        canonical = merge.get(author_id, author_id)
+        combined[canonical] = combined.get(canonical, 0) + int(uses)
+    return sorted(combined.items(), key=lambda row: (-row[1], row[0]))
 
 
 def distinct_word_count(conn, channel_id: str) -> int:
@@ -243,7 +331,7 @@ def link_tables(conn, channel_id: str):
 
 
 def link_cells(conn, channel_id: str, day_index, author_index, host_index):
-    output = []
+    combined: dict[tuple[int, int, int], int] = {}
     for day, author_id, key, uses in rows(
         conn,
         """
@@ -253,9 +341,11 @@ def link_cells(conn, channel_id: str, day_index, author_index, host_index):
         (channel_id,),
     ):
         host = key.split("/", 1)[0]
-        if day in day_index and author_id in author_index and host in host_index:
-            output.append([day_index[day], author_index[author_id], host_index[host], uses])
-    return output
+        if day not in day_index or author_id not in author_index or host not in host_index:
+            continue
+        cell = (day_index[day], author_index[author_id], host_index[host])
+        combined[cell] = combined.get(cell, 0) + uses
+    return [[day, author, host, uses] for (day, author, host), uses in combined.items()]
 
 
 def link_stats(conn, channel_id: str) -> dict[str, int]:

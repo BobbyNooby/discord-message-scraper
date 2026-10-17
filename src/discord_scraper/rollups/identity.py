@@ -55,6 +55,29 @@ def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
     ).fetchone() is not None
 
 
+def _config_merge(cfg: Config) -> dict[str, str]:
+    """The merges declared in ``config.toml`` as a plain string map."""
+    merge: dict[str, str] = {}
+    for canonical, alts in (cfg.identities or {}).items():
+        merge[str(canonical)] = str(canonical)
+        for alt in alts:
+            merge[str(alt)] = str(canonical)
+    return merge
+
+
+def _table_merge(conn: sqlite3.Connection, channel_id: str) -> dict[str, str]:
+    """The merges the admin board wrote to ``identity`` for one channel."""
+    if not _table_exists(conn, "identity"):
+        return {}
+    return {
+        str(account): str(canonical)
+        for canonical, account in conn.execute(
+            "SELECT canonical_id, account_id FROM identity WHERE channel_id = ?",
+            (channel_id,),
+        )
+    }
+
+
 def _merge_map(conn: sqlite3.Connection, cfg: Config) -> dict[str, str]:
     """``account_id -> canonical_id``, from config.toml *and* the identity table.
 
@@ -62,18 +85,24 @@ def _merge_map(conn: sqlite3.Connection, cfg: Config) -> dict[str, str]:
     table is what the admin page writes. The table wins where they disagree,
     because it is the newer of the two.
     """
-    merge: dict[str, str] = {}
-    for canonical, alts in (cfg.identities or {}).items():
-        merge[str(canonical)] = str(canonical)
-        for alt in alts:
-            merge[str(alt)] = str(canonical)
-    if _table_exists(conn, "identity"):
-        for canonical, account in conn.execute(
-            "SELECT canonical_id, account_id FROM identity WHERE channel_id = ?",
-            (cfg.channel_id,),
-        ):
-            merge[str(account)] = str(canonical)
+    merge = _config_merge(cfg)
+    merge.update(_table_merge(conn, cfg.channel_id))
     return merge
+
+
+def canonical_map(conn: sqlite3.Connection, channel_id: str,
+                  cfg: Config | None = None) -> dict[str, str]:
+    """``account_id -> canonical_id``, chains already followed.
+
+    The read path's twin of ``_merge_map``: a rollup row was written with
+    whichever account sent the message, so serving it means mapping that account
+    back to the person it belongs to. Computed from the identity table (and the
+    config, when one is passed) without touching ``messages`` — a request must
+    never scan the raw table.
+    """
+    merge = _config_merge(cfg) if cfg is not None else {}
+    merge.update(_table_merge(conn, channel_id))
+    return {account: _canonical(account, merge) for account in merge}
 
 
 def _canonical(author_id: str, merge: dict[str, str]) -> str:
