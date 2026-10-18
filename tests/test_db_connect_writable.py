@@ -1,19 +1,11 @@
-"""The tool owns its writable handle; the dashboard only re-exports it.
+"""The tool owns its writable handle.
 
-After the split the tool must not reach into the dashboard for its own write
-path, so ``connect_writable`` lives in ``discord_scraper.db`` and
-``api.deps`` imports that one object rather than defining a second copy.
+``connect_writable`` lives in ``discord_scraper.db``. The dashboard re-exports
+this one object, but that re-export is pinned in the dashboard's own suite —
+importing ``discord_stats`` from here would fail in a tool-only checkout.
 """
 
 import sqlite3
-
-
-def test_api_deps_reexports_the_tool_function():
-    from discord_scraper import db
-    from discord_stats.api import deps
-
-    # Not an equal copy: the *same* object, so there is one implementation.
-    assert deps.connect_writable is db.connect_writable
 
 
 def test_tool_writable_connection_sets_its_own_pragmas(tmp_path):

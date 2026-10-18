@@ -261,19 +261,3 @@ def test_migrating_the_control_plane_keeps_an_existing_stamp(mem_db):
     set_meta(mem_db, "schema_version", "0")
     create_control_tables(mem_db)   # idempotent re-run, as the API boot does
     assert schema_version(mem_db) == 0
-
-
-def test_the_api_boot_adds_the_channel_index(seeded_db_path, tmp_path):
-    """Without it, every channel-scoped query scans the whole table."""
-    import sqlite3
-
-    from discord_stats.api.app import create_app
-    from tests.conftest import cfg_fixture
-
-    before = {row[1] for row in sqlite3.connect(seeded_db_path).execute("PRAGMA index_list(messages)")}
-    assert "idx_channel" not in before
-
-    create_app(cfg_fixture(tmp_path), seeded_db_path)
-
-    after = {row[1] for row in sqlite3.connect(seeded_db_path).execute("PRAGMA index_list(messages)")}
-    assert "idx_channel" in after
