@@ -36,6 +36,7 @@ dev = ["pytest"]
 
 [project.scripts]
 discord-scraper = "discord_scraper.cli:main"
+discord-stats = "discord_stats.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
