@@ -1,9 +1,10 @@
-"""Command-line interface: python3 -m analysis <command> [options]."""
+"""Command-line interface: python3 -m discord_scraper.analysis <command> [options]."""
 
 from __future__ import annotations
 
 import argparse
 import sqlite3
+import sys
 
 from .db import REAL_MESSAGES, connect
 from .queries import (
@@ -32,7 +33,13 @@ def _print_rows(rows: list[sqlite3.Row]) -> None:
         print("  ".join(str(r[c]).ljust(w)[: w + 20] for c, w in zip(cols, widths)))
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
+    """Run one analysis command. ``argv`` defaults to the process arguments.
+
+    ``discord-scraper analyze`` forwards its remaining arguments here, so this
+    parses them exactly like every other entry point: bare ``argv`` runs from
+    ``sys.argv``, and an explicit list is parsed as given.
+    """
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="cmd")  # no cmd = full report
 
@@ -48,11 +55,11 @@ def main() -> None:
     p = sub.add_parser("emoji"); p.add_argument("--limit", type=int, default=30); p.add_argument("--author")
     p = sub.add_parser("report"); p.add_argument("--out", default=None); p.add_argument("--bucket", default="year", choices=["auto", "year", "month", "day"])
 
-    args = parser.parse_args()
+    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     if args.cmd is None or args.cmd == "report":
         report(args.out if args.cmd == "report" else None,
                args.bucket if args.cmd == "report" else "year")
-        return
+        return 0
 
     conn = connect()
 
@@ -84,3 +91,4 @@ def main() -> None:
     elif args.cmd == "emoji":
         for emoji, n in emoji_use(conn, args.limit, args.author):
             print(f"{n:5d}  {emoji}")
+    return 0
