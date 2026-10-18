@@ -255,22 +255,46 @@ class Derived:
     best_day: dict[str, tuple[str, str]] = field(default_factory=dict)
 
 
-def derive(conn: sqlite3.Connection, cfg: Config, ids: Identities) -> Derived:
+# A long derive used to be invisible: the run row said "started" and then the
+# next thing written was the write phase, tens of seconds later. This is how
+# often the scan says where it has got to, so the live feed shows progress
+# rather than only elapsed time.
+DERIVE_HEARTBEAT_SECONDS = 5.0
+# Time is checked every this many rows rather than every row; the clock call is
+# cheap but not free, and 256 rows is well under a millisecond of scanning.
+DERIVE_HEARTBEAT_ROWS = 256
+
+
+def derive(conn: sqlite3.Connection, cfg: Config, ids: Identities,
+           on_progress: Callable[[int, float], None] | None = None) -> Derived:
     """One pass over the channel's messages, feeding all fourteen families.
 
     Streams rows rather than fetching them: ``raw`` is 483 MB on the reference
     dataset, and holding it in memory to save a scan would trade one problem for
     a worse one.
+
+    ``on_progress(scanned, seconds)`` is called at most every
+    ``DERIVE_HEARTBEAT_SECONDS`` while the scan runs, so a caller can write a
+    heartbeat without the loop knowing what a heartbeat is.
     """
     d = Derived()
     display = latest_display_names(conn)
     stop = load_stopwords(cfg) | _name_tokens(conn, display)
     allowed = set(cfg.count_types) if cfg.count_types else None
 
+    scan_started = time.monotonic()
+    last_beat = scan_started
+    checked = 0
     cursor = conn.execute(
         f"SELECT {', '.join(_COLUMNS)} FROM messages WHERE channel_id = ?", (cfg.channel_id,)
     )
     for row in cursor:
+        checked += 1
+        if on_progress is not None and checked % DERIVE_HEARTBEAT_ROWS == 0:
+            now = time.monotonic()
+            if now - last_beat >= DERIVE_HEARTBEAT_SECONDS:
+                on_progress(d.source_count, now - scan_started)
+                last_beat = now
         (mid, author_id, content, created, edited, reply_to, has_attachments, mtype,
          raw) = row
         d.source_count += 1
@@ -612,12 +636,42 @@ def _record_events(conn: sqlite3.Connection, events: Iterable[tuple]) -> None:
     """
     conn.executemany(
         "INSERT INTO rebuild_events "
-        "(started_at, finished_at, kind, family, phase, message, rows, seconds) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "(started_at, finished_at, kind, family, phase, message, rows, seconds, "
+        " level, source, scope) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         list(events),
     )
     prune_rebuild_events(conn)
     conn.commit()
+
+
+def record_event(
+    conn: sqlite3.Connection,
+    *,
+    message: str,
+    source: str,
+    scope: str,
+    level: str = "info",
+    kind: str = "op",
+    family: str | None = None,
+    phase: str | None = None,
+    rows: int | None = None,
+    seconds: float | None = None,
+    started_at: str | None = None,
+    finished_at: str | None = None,
+) -> None:
+    """Write one control-plane log line.
+
+    The one writer for everything that is not a rebuild's own progress, so the
+    retention policy stays in one place: every write prunes, exactly like a
+    rebuild's, and a long-lived worker cannot grow the table past ``EVENTS_KEEP``.
+    Callers pass counts, ids, names and timings only — never message text or a
+    media URL.
+    """
+    _record_events(conn, [(
+        started_at or _iso_now(), finished_at, kind, family, phase, message,
+        rows, seconds, level, source, scope,
+    )])
 
 
 def _iso_now() -> str:
@@ -661,14 +715,26 @@ def rebuild_all(
     # rebuild is running this row is the only thing the board has to read, so it
     # cannot wait for the rollup transaction to end.
     run_clock = time.monotonic()
-    _record_events(conn, [(stamp, None, "run", None, "started", "rebuild started", None, None)])
+    _record_events(conn, [(stamp, None, "run", None, "started", "rebuild started", None, None,
+                           "info", "rebuild", "rollup")])
+
+    def heartbeat(scanned: int, seconds: float) -> None:
+        """Say the derive is still moving, so a 20–40 s scan is visible by itself.
+
+        A plain ``op`` row, not a ``run`` row: the run row's phase is what the
+        board reads to decide "running", and a heartbeat must not be mistaken for
+        a second run starting.
+        """
+        record_event(conn, kind="op", phase="deriving", source="rebuild", scope="rollup",
+                     message=f"deriving: {scanned} messages scanned in {seconds:.1f}s",
+                     rows=scanned, seconds=round(seconds, 3))
 
     try:
         phase("deriving")
         create_rollup_tables(conn)
         ids = resolve_identities(conn, cfg)
         config_hash = config_digest(cfg, conn)
-        derived = derive(conn, cfg, ids)
+        derived = derive(conn, cfg, ids, on_progress=heartbeat)
 
         # Mark every family in flight before the write transaction opens. It is
         # committed a moment early, but it is what makes a poll during the write
@@ -676,7 +742,8 @@ def rebuild_all(
         # the real row count and the seconds each family took.
         phase("writing")
         _record_events(conn, [
-            (_iso_now(), None, "family", family, "started", f"{family} started", None, None)
+            (_iso_now(), None, "family", family, "started", f"{family} started", None, None,
+             "info", "rebuild", "rollup")
             for family in FAMILIES
         ])
 
@@ -723,11 +790,12 @@ def rebuild_all(
     _record_events(conn, [
         (family_seconds[family][0], finished_at, "family", family, "finished",
          f"{family} {counts[family]} rows rebuilt", counts[family],
-         round(family_seconds[family][1], 3))
+         round(family_seconds[family][1], 3), "info", "rebuild", "rollup")
         for family in FAMILIES
     ] + [
         (stamp, finished_at, "run", None, "finished",
-         f"{total_rows} rows rebuilt in {elapsed:.1f}s", total_rows, round(elapsed, 3)),
+         f"{total_rows} rows rebuilt in {elapsed:.1f}s", total_rows, round(elapsed, 3),
+         "info", "rebuild", "rollup"),
     ])
     phase("finished")
     return counts
@@ -740,7 +808,7 @@ def _record_failure(conn: sqlite3.Connection, stamp: str, run_clock: float,
         _record_events(conn, [(
             stamp, _iso_now(), "run", None, "failed",
             f"rebuild failed: {type(exc).__name__}: {exc}", None,
-            round(time.monotonic() - run_clock, 3),
+            round(time.monotonic() - run_clock, 3), "error", "rebuild", "rollup",
         )])
     except sqlite3.Error:
         pass

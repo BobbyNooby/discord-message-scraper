@@ -249,19 +249,26 @@ CREATE TABLE IF NOT EXISTS jobs (
   phase TEXT
 );
 
--- The rebuild's own log: a run-level start/finish pair plus one pair per family.
--- Small and append-only, but bounded by `build.prune_rebuild_events` so a
--- long-lived instance cannot grow it forever.
+-- The control-plane log: rebuild progress (a run-level start/finish pair plus
+-- one pair per family) and, since the live stream, every other operation worth
+-- seeing. Small and append-only, but bounded by `build.prune_rebuild_events` so
+-- a long-lived instance cannot grow it forever.
 CREATE TABLE IF NOT EXISTS rebuild_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   started_at TEXT,
   finished_at TEXT,
-  kind TEXT,                              -- "run" or "family"
-  family TEXT,                            -- NULL for a run-level event
-  phase TEXT,                             -- "started", "finished", "failed"
+  kind TEXT,                              -- "run", "family" or "op"
+  family TEXT,                            -- NULL for a run-level or ops event
+  phase TEXT,                             -- "started", "finished", "failed", "deriving"
   message TEXT,
   rows INTEGER,
-  seconds REAL
+  seconds REAL,
+  -- Who spoke and how loudly. Rows written before these columns existed read
+  -- back as NULL, which the readers render as an unnamed info line rather than
+  -- refusing to show the history.
+  level TEXT,                             -- "info", "warn", "error"
+  source TEXT,                            -- "rebuild", "worker", "api"
+  scope TEXT                              -- "rollup", "ingest", "upload", "identity", ...
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -379,6 +386,14 @@ def migrate(conn: sqlite3.Connection) -> None:
          "ALTER TABLE rollup_media ADD COLUMN animated TEXT"),
         ("jobs", "phase",
          "ALTER TABLE jobs ADD COLUMN phase TEXT"),
+        # The live log's severity and provenance. NULL on rows written before
+        # the columns existed; the readers fall back to an info line.
+        ("rebuild_events", "level",
+         "ALTER TABLE rebuild_events ADD COLUMN level TEXT"),
+        ("rebuild_events", "source",
+         "ALTER TABLE rebuild_events ADD COLUMN source TEXT"),
+        ("rebuild_events", "scope",
+         "ALTER TABLE rebuild_events ADD COLUMN scope TEXT"),
     )
     for table, column, ddl in added:
         columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}

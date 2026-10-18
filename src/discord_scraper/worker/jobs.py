@@ -108,12 +108,28 @@ def claim_next(conn: sqlite3.Connection) -> dict[str, Any] | None:
 def _ingest(conn: sqlite3.Connection, cfg: Config, kind: str) -> str:
     """Run the existing scrape path unchanged, then queue a rebuild (spec §10.5)."""
     from discord_scraper import pipeline
+    from discord_scraper.rollups.build import record_event
 
     job = pipeline.catch_up if kind == "catch_up" else pipeline.backfill
-    added = job(conn, cfg.scraper(), pipeline.Budget(None), time.monotonic())
+    started = time.monotonic()
+    record_event(conn, source="worker", scope="ingest", phase="started",
+                 message=f"{kind} started")
+    try:
+        added = job(conn, cfg.scraper(), pipeline.Budget(None), started)
+    except Exception as exc:
+        record_event(conn, source="worker", scope="ingest", level="error", phase="failed",
+                     message=f"{kind} failed: {type(exc).__name__}: {exc}",
+                     seconds=round(time.monotonic() - started, 3))
+        raise
+    seconds = round(time.monotonic() - started, 3)
     set_worker_state(conn, "last_ingest_at", _now())
     set_worker_state(conn, "last_ingest_added", added)
     enqueue(conn, cfg.channel_id, "rebuild_rollups")
+    # Counts and a duration, never a message: the same privacy line as the rest
+    # of the dashboard.
+    record_event(conn, source="worker", scope="ingest", phase="finished",
+                 rows=int(added), seconds=seconds,
+                 message=f"ingest: {added} new messages in {seconds:.1f}s")
     return f"{kind}: {added} messages added"
 
 
