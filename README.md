@@ -1,22 +1,13 @@
-# discord-scraper
+# discord-message-scraper
 
-Scrape a Discord channel into a local SQLite database, analyse it from the CLI,
-and optionally serve a stats site over it.
+Pull a Discord channel's full history into a local SQLite database, roll it up
+into queryable aggregates, and analyse it. **Zero dependencies** — Python 3.11+
+and the standard library, nothing else.
 
-**Install one of three ways, depending on how much you want:**
-
-| Tier | Install | What you get |
-|---|---|---|
-| 1 — CLI only | `pipx install discord-scraper` | scrape a channel; the text analysis CLI. No dependencies at all — HTTP is stdlib `urllib` |
-| 2 — CLI + site | `pipx install "discord-scraper[web]"` then `discord-stats serve` | the stats site on localhost |
-| 3 — Container | `docker run -v ./data:/data --env-file .env discord-scraper` | the same site, with neither Python nor Node installed on the host |
-
-The container's home is the volume (`DISCORD_SCRAPER_HOME=/data`), so
-`config.toml` belongs in `./data` beside `messages.db`; `--env-file .env`
-injects the secrets and nothing else.
-
-The CLI is tier 1 and stays a first-class interface, not a leftover: it is how
-the tool is useful with zero infrastructure. The web is additive.
+The dashboard that renders these rollups lives in
+[discord-message-stats](https://github.com/BobbyNooby/discord-message-stats),
+which consumes this repo as a library. Our own themed instance with the Wrapped
+recap is private.
 
 > **ToS caveat, read it:** scraping uses a **user-account token** against
 > Discord's private REST API, which violates Discord's Terms of Service
@@ -25,33 +16,74 @@ the tool is useful with zero infrastructure. The web is additive.
 > compliant alternative is Discord's own data export
 > (Settings → Privacy & Safety → Request Data), which this tool can also import.
 
-**Jump to:** [quickstart](#quickstart) · [the stats site](#the-stats-site) ·
-[operations](OPERATIONS.md) · [schema](#schema) · [analysis CLI](#analysis)
+**Jump to:** [quickstart](#quickstart) · [which token](#which-token) ·
+[commands](#commands) · [schema](#schema) · [analysis](#analysis)
 
 ## Quickstart
 
 ```bash
-git clone <this repo> && cd discord-scraper
-python3 -m venv .venv && . .venv/bin/activate
+git clone https://github.com/BobbyNooby/discord-message-scraper
+cd discord-message-scraper
 
-# 1. secrets in .env, settings in config.toml — never the other way round
+# secrets in .env, settings in config.toml — never the other way round
 cp .env.example .env                 # then put DISCORD_TOKEN in it
 cp config.example.toml config.toml   # then set source.channel_id
 
-# 2. tier 1: scrape, then analyse. Nothing to install for either.
 python3 main.py scrape               # needs the real token; resumes if interrupted
-python3 analysis.py                  # default report: charts + text dump
-
-# 3. tier 2: the site
-pip install -e ".[web]"
-discord-scraper rollups rebuild --db output/messages.db
-discord-stats serve                # http://127.0.0.1:8000
+python3 main.py rollups rebuild --db output/messages.db   # the aggregates the dashboard reads
+python3 analysis.py                  # a text report of what you scraped
 ```
 
-Only the scrape needs `DISCORD_TOKEN`; the analysis and the site read the local
-database. An empty database is not a crash: the analysis prints
-`no messages yet — run a scrape first`, so run the scrape to completion first.
-The named analyses (`stats`, `top-authors`, …) are in [Analysis](#analysis).
+Nothing needs installing for those: `main.py` and `analysis.py` put `src/` on
+the path. `pip install -e .` adds the `discord-scraper` console script, which
+carries exactly the same subcommands (`discord-scraper scrape`, …).
+
+Only the scrape needs `DISCORD_TOKEN`; the rollups and the analysis read the
+local database. An empty database is not a crash: the analysis prints
+`No database at … — run discord-scraper scrape first` and exits 0.
+
+## Which token
+
+Both are sent the same way — in the `Authorization` header — but they
+authenticate **different principals**, and that difference is the whole story:
+
+- A **bot token** (from the [Developer Portal](https://discord.com/developers/applications))
+  authenticates a separate bot user. It is the sanctioned path, it is what the
+  documented Bot API expects, and it cannot get your account actioned. The
+  catch: a bot must be **invited** to the server and granted read access, and
+  **a bot cannot join a group DM at all** — Discord does not support that.
+- A **user token** authenticates *you*. It is the only way to read a group DM,
+  and it is also **self-botting**: automating a user account breaks Discord's
+  Terms of Service and can get the account actioned. If you go this way, use a
+  dedicated alt account, not your own.
+
+This tool sends whatever you give it verbatim, so both work. Choose with your
+eyes open; the legal risk is yours, not the tool's.
+
+## Commands
+
+| Command | Purpose |
+|---|---|
+| `python3 main.py scrape` | fetch history (resumable) |
+| `python3 main.py rollups rebuild --db output/messages.db` | rebuild every rollup family (one writer at a time) |
+| `python3 main.py rollups status --db output/messages.db` | what is stale and why |
+| `python3 main.py analyze <cmd>` | stats, top-authors, top-words, emoji, reactions, search… |
+| `python3 main.py serve --worker` | run the ingest worker that the dashboard's queue drives |
+
+`serve` is worker-only on purpose: the HTTP dashboard, OAuth, the SPA and the
+container all live in
+[discord-message-stats](https://github.com/BobbyNooby/discord-message-stats).
+`rollups` reads a database you name with `--db`, so it works against a copy.
+
+Settings live in `config.toml`; **secrets live only in `.env`**. Operators can
+change the channel, timezone or stopwords at runtime through the dashboard,
+which stores an override beside the database — `--ignore-overrides` on any
+command ignores it:
+
+```sh
+python3 main.py scrape --config /path/to/config.toml
+python3 main.py scrape --ignore-overrides
+```
 
 ## Layout
 
@@ -68,15 +100,13 @@ src/discord_scraper/
   pipeline.py         the scrape itself (catch-up + backfill, resume points)
   scraper/            Discord REST client, schema, transform, constants
   analysis/           read-only queries, text report and matplotlib charts
-  api/                the FastAPI app, auth, and the SPA it serves
   worker/             the scheduled ingest worker
-  rollups/            the precomputed rollup tables the API reads
+  rollups/            the precomputed rollup tables the dashboard reads
   data/               packaged stopword packs (+ their licence)
 output/
   messages.db         the database (created on first run)
 sql/
   analysis.sql        starter queries for analysis
-web/                  the React frontend (pnpm)
 tests/                the pytest suite
 ```
 
@@ -89,7 +119,7 @@ cp config.example.toml config.toml   # everything else
 
 `.env` holds secrets only, and the one it needs is:
 
-- `DISCORD_TOKEN` — a **user** token (bots can't read DMs they weren't added to)
+- `DISCORD_TOKEN` — see [Which token](#which-token)
 
 `config.toml` holds every setting. The ones a first run needs are:
 
@@ -100,17 +130,6 @@ cp config.example.toml config.toml   # everything else
 The rest — timezone, counted message types, the bot rule, stopword packs,
 identity merges, OAuth client id and redirect URI — have neutral defaults and
 are documented inline in `config.example.toml`.
-
-The channel can be changed without editing the file: saving it in the admin
-board (`/admin`) stores an override next to the database, and the scrape, the
-worker and `rollups rebuild` all resolve through that override. The CLI reads a
-different `config.toml` with `--config`, and ignores stored overrides entirely
-with `--ignore-overrides`:
-
-```sh
-python3 main.py scrape --config /path/to/config.toml
-python3 main.py scrape --ignore-overrides
-```
 
 ## Run
 
@@ -156,16 +175,16 @@ months slowly — and it hovers below 100% until the first message is reached.
 ## Tests
 
 ```sh
-# the suite spans both tiers, so it needs the web extra beside the test runner
-python3 -m pip install -e ".[dev,web]"
+python3 -m pip install -e ".[dev]"
 python3 -m pytest -q
 ```
 
-No network: the catch-up tests run against a temp SQLite file with only the
-HTTP call faked, and the rollup tests run against an in-memory database with
-the real schema. The resume paths get their own tests — a pass killed
-mid-update, a re-run that is already current, a `--max-batches` stop, and new
-messages arriving while a hole is still open.
+No network: the catch-up tests run against a temp SQLite file with Discord's
+REST calls faked by `httpx.MockTransport` (which is why `httpx` is a dev
+dependency of an otherwise dependency-free tool), and the rollup tests run
+against an in-memory database with the real schema. The resume paths get their
+own tests — a pass killed mid-update, a re-run that is already current, a
+`--max-batches` stop, and new messages arriving while a hole is still open.
 
 `python3 -m unittest discover -s tests -t .` also works, but it only finds the
 few `unittest.TestCase` classes, not the pytest-style functions.
@@ -316,89 +335,34 @@ SET sticker_count = json_array_length(raw, '$.sticker_items')
 WHERE json_extract(raw, '$.sticker_items') IS NOT NULL;
 ```
 
-## The stats site
+## The dashboard
 
-The site is a second, optional layer over the same database: precomputed rollup
-tables plus a read-only, authenticated API and a React frontend that the API
-serves from the same port.
+The site is a separate repo: precomputed rollup tables plus a read-only,
+authenticated API and a React frontend served from one port. It pins this tool
+as a submodule under `vendor/`.
 
 ```bash
 discord-scraper rollups rebuild --db output/messages.db  # required before the site has anything to show
 discord-scraper rollups status --db output/messages.db   # row counts + current/stale per family
-discord-stats serve                                    # the dashboard API and SPA, :8000
 ```
 
-`rollups` reads a database you name with `--db`, so it works against a copy
-without touching the live one. `serve` defaults to `output/messages.db`.
+**The API never aggregates on request.** It reads the rollup tables this tool
+builds and reports when they were built; a request never scans `messages`. That
+is why the rebuild is a separate step, and why `rollups status` matters: after
+a timezone change, an identity merge or a stopword edit, the tables are
+**stale** until you rebuild. See the
+[dashboard's README](https://github.com/BobbyNooby/discord-message-stats#readme)
+for the site, the OAuth login, the admin board and the container.
 
-**The API never aggregates on request.** It reads fourteen rollup tables and
-reports when they were built; a request never scans `messages` and never touches
-the 483 MB of raw JSON. That is why the rebuild is a separate step, and why
-`rollups status` matters: after a timezone change, an identity merge or a
-stopword edit, the tables are **stale** until you rebuild.
+## Privacy
 
-### Routes
-
-| Route | Who | What |
-|---|---|---|
-| `/` | signed-in viewer | the dashboard: 36 panels in six sections |
-| `/login` | anyone | Discord OAuth, scope `identify` only |
-| `/admin` | admin | data source, who shows, identity merge, ingest, rollup cache, access |
-| `/api/health` | anyone | liveness plus the banner state |
-| `/api/bootstrap` | viewer | the whole dashboard payload in one request |
-| `/api/recent` | viewer | the last N messages — see the privacy note below |
-| `/api/words` | viewer | search the full word index beyond the shipped 500 |
-| `/api/admin/*` | admin | status, config, jobs, recalculate, upload, search |
-
-Two endpoints deliberately break the "aggregates only" rule, and both are
-viewer-gated: `/api/recent` (truncated to ~120 characters, no attachments,
-embeds or raw JSON; `ui.show_recent = 0` removes it entirely) and the admin
-search. Everything else returns numbers.
-
-### Access
-
-- Secrets, environment only: `DISCORD_TOKEN`, `DISCORD_CLIENT_SECRET`,
-  `SESSION_SECRET`, `ADMIN_DISCORD_ID`.
-- Settings, `config.toml`: channel, timezone, counted message types, bot rule,
-  stopword packs, identity merges, OAuth client id and redirect URI. The admin
-  board can override the channel, the timezone, extra stopwords, the allowlist
-  policy and the schedule; `--ignore-overrides` bypasses those stored values.
-- A viewer is the admin id, anyone with an explicit `allow` row, or anybody who
-  has posted. An admin is `ADMIN_DISCORD_ID`. Sessions are rows in SQLite,
-  stored hashed, so they are revocable.
-- For a quick look on a phone there is `discord-stats serve --dev-login`,
-  which enables `/auth/dev-login` and signs anyone who can reach the port in as
-  viewer or admin. **Development only** — it prints a warning, and it must never
-  be used on a public host.
-
-### Deploying
-
-`Dockerfile` is a two-stage build (Node builds the SPA, Python runs the
-server) and `docker-compose.yml` runs the API and the worker as separate
-services over one shared volume, so the Discord token can live on the machine
-that serves no HTTP. Backup, restore, the serve shapes and the tunnel are in
-[OPERATIONS.md](OPERATIONS.md).
-
-## Development
-
-```bash
-# backend
-python3 -m pytest -q
-
-# frontend (Vite dev server proxies /api to :8000)
-cd web && pnpm install && pnpm dev
-cd web && pnpm test && pnpm typecheck
-```
-
-The design spec and the implementation plans live in `docs/superpowers/`, which
-is **gitignored** — they describe one specific chat and are not part of the
-shipped tool.
+The rollups are aggregates. Message text never leaves the database, and the
+stopword packs in `data/` exist so the word index stays meaningfully "what
+people say", not "what the scraper happened to see".
 
 ## Credits
 
 English stopwords come from [stopwords-iso](https://github.com/stopwords-iso/stopwords-iso)
 (MIT, © 2020 Gene Diaz); the licence ships beside the data in
 `src/discord_scraper/data/LICENSE-stopwords.txt`, along with an opt-in Malay
-pack. Charting is [ECharts](https://echarts.apache.org/) (Apache-2.0) and its
-word-cloud extension. UI chrome follows [shadcn/ui](https://ui.shadcn.com/)
-conventions over Radix primitives.
+pack.
