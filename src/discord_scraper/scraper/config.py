@@ -61,13 +61,23 @@ class Config:
 
 
 def normalize_batch_size(value) -> int:
-    """Validate the per-request message count (Discord caps at 100)."""
+    """Validate the per-request message count (Discord caps at 100).
+
+    Called for ``source.batch_size`` in config.toml and for the ``--batch-size``
+    flag, so a bad value names both — not an environment variable, which is not
+    where this setting lives.
+    """
     try:
         n = int(value)
     except (TypeError, ValueError):
-        raise SystemExit(f"Invalid BATCH_SIZE: {value!r} — must be an integer")
+        raise SystemExit(
+            f"Invalid batch size: {value!r} — must be a whole number "
+            "(config.toml source.batch_size, or --batch-size)"
+        )
     if not 1 <= n <= BATCH_SIZE_MAX:
         raise SystemExit(
-            f"BATCH_SIZE must be 1-{BATCH_SIZE_MAX} (Discord's API maximum is {BATCH_SIZE_MAX})"
+            f"batch size must be 1-{BATCH_SIZE_MAX} "
+            f"(config.toml source.batch_size, or --batch-size; "
+            f"Discord's API maximum is {BATCH_SIZE_MAX})"
         )
     return n
