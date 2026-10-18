@@ -1,14 +1,16 @@
 """Scrape one Discord DM/group channel's message history into SQLite.
 
 Usage:
-    python3 main.py                    # full scrape (resumes automatically)
-    python3 main.py --max-batches 3    # quick test run (3 batches of 50)
+    discord-scraper scrape                 # full scrape (resumes automatically)
+    discord-scraper scrape --max-batches 3 # quick test run (3 batches of 50)
+    python3 main.py scrape                 # the same thing from a bare checkout
 
 Layout:
     scraper/api.py        Discord REST client (urllib, 429 handling)
-    scraper/config.py     constants, paths, .env loading
+    scraper/config.py     paths and scrape constants
     scraper/database.py   schema, resume meta, batch inserts
     scraper/transform.py  API message -> DB row
+    config.py             settings from config.toml, secrets from .env
     output/messages.db    the database (created on first run)
     sql/analysis.sql      starter queries for analysis
 

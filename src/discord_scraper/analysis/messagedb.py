@@ -14,7 +14,7 @@ from discord_scraper.scraper.config import DB_PATH
 class MessageDB:
     """High-level wrapper for developing your own analysis.
 
-    from analysis import MessageDB
+    from discord_scraper.analysis import MessageDB
     db = MessageDB()
 
     db.messages()                                  # every message as a parsed dict
