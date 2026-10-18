@@ -313,7 +313,7 @@ def _serve(args) -> int:
         # No HTTP at all: the split exists so the Discord token can live on a
         # machine that serves nothing (spec §4.6).
         from discord_scraper import locks
-        from discord_scraper.api.deps import connect_writable
+        from discord_stats.api.deps import connect_writable
         from discord_scraper.worker.loop import run_forever
 
         conn = connect_writable(database)
@@ -336,7 +336,7 @@ def _serve(args) -> int:
     try:
         import uvicorn
 
-        from discord_scraper.api.app import create_app
+        from discord_stats.api.app import create_app
     except ModuleNotFoundError as exc:
         # Tier 1 installs have no web dependencies at all; say what to install
         # instead of letting the import traceback out of the console script.
@@ -427,7 +427,7 @@ def _find_static(explicit: str | None, *, project_dir=None, package_dir=None) ->
 
 def _worker_thread(cfg, database) -> None:
     """Own connection, own loop — a restart of the API does not orphan a job."""
-    from discord_scraper.api.deps import connect_writable
+    from discord_stats.api.deps import connect_writable
     from discord_scraper.worker.loop import run_forever
 
     conn = connect_writable(database)

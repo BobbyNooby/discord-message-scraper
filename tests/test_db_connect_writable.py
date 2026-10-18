@@ -10,7 +10,7 @@ import sqlite3
 
 def test_api_deps_reexports_the_tool_function():
     from discord_scraper import db
-    from discord_scraper.api import deps
+    from discord_stats.api import deps
 
     # Not an equal copy: the *same* object, so there is one implementation.
     assert deps.connect_writable is db.connect_writable
