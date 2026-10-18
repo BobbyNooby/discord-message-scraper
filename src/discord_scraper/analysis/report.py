@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sys
 from collections import Counter
 from pathlib import Path
 
@@ -28,6 +29,20 @@ def _bucket_fmt(conn) -> tuple[str, str]:
     return "%Y-%m-%d", "day"
 
 
+def _message_count(conn) -> int:
+    """Messages in the database, or 0 when the table is not there yet.
+
+    A zero-byte file (``sqlite3 output/messages.db`` before any scrape) is an
+    empty database too, not a reason to traceback from a report.
+    """
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'messages'"
+    ).fetchone()
+    if not exists:
+        return 0
+    return conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+
+
 def report(out_dir=None, bucket: str = "year") -> Path:
     """Generate word-count AND message-count charts (pie + timeline each) plus
     a text dump of the exact data behind them into output/report/.
@@ -35,8 +50,11 @@ def report(out_dir=None, bucket: str = "year") -> Path:
     bucket: "year" (default), "month", "day", or "auto" (pick from data span).
     """
     out_dir = Path(out_dir) if out_dir else OUTPUT_DIR / "report"
-    out_dir.mkdir(parents=True, exist_ok=True)
     conn = connect()
+    if not _message_count(conn):
+        # Nothing to bucket, and every chart below would index an empty list.
+        sys.exit("no messages yet — run a scrape first")
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     if bucket == "auto":
         fmt, unit = _bucket_fmt(conn)
