@@ -141,7 +141,11 @@ def set_job_phase(conn: sqlite3.Connection, job_id: int, phase: str) -> None:
 
 def _rebuild(conn: sqlite3.Connection, cfg: Config,
              on_phase: Callable[[str], None] | None = None) -> str:
-    counts = rebuild_all(conn, cfg, on_phase=on_phase)
+    # The same resolution the API uses, so a rebuild bakes the zone the
+    # dashboard will compare against and the guard stays satisfiable.
+    from discord_scraper import overrides
+
+    counts = rebuild_all(conn, overrides.effective_for(conn, cfg), on_phase=on_phase)
     return f"rebuilt {len(counts)} families"
 
 
