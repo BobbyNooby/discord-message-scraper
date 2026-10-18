@@ -43,6 +43,10 @@ def build_parser() -> argparse.ArgumentParser:
     for action in (rebuild, status):
         action.add_argument("--config", default=None,
                             help="config.toml to compare against (default: the checkout's)")
+    rebuild.add_argument(
+        "--ignore-overrides", action="store_true",
+        help="rebuild exactly what config.toml says, ignoring stored operator overrides",
+    )
     serve = sub.add_parser("serve", help="run the web API, the ingest worker and the SPA")
     serve.add_argument("--db", default=None, help="path to messages.db (default: output/)")
     serve.add_argument("--config", default=None, help="path to config.toml")
@@ -204,12 +208,20 @@ def _rollups_rebuild(args) -> int:
     except SystemExit as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    if args.channel:
-        settings = replace(settings, channel_id=args.channel)
-
     conn = _connect(args.db)
     try:
-        counts = rebuild_all(conn, config_from_settings(settings))
+        # The operator overrides are what the API compares the recorded zone
+        # against, so a rebuild reads them too — otherwise the guard can never
+        # be satisfied. `--ignore-overrides` is the deliberate way out, and an
+        # explicit `--channel` beats a stored channel override.
+        cfg = config_from_settings(settings)
+        if not args.ignore_overrides:
+            from discord_scraper import overrides
+
+            cfg = overrides.effective_for(conn, cfg)
+        if args.channel:
+            cfg = replace(cfg, settings=replace(cfg.settings, channel_id=args.channel))
+        counts = rebuild_all(conn, cfg)
     finally:
         conn.close()
 
