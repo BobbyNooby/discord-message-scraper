@@ -8,7 +8,7 @@ and optionally serve a stats site over it.
 | Tier | Install | What you get |
 |---|---|---|
 | 1 — CLI only | `pipx install discord-scraper` | scrape a channel; the text analysis CLI. No dependencies at all — HTTP is stdlib `urllib` |
-| 2 — CLI + site | `pipx install "discord-scraper[web]"` then `discord-scraper serve` | the full stats site on localhost |
+| 2 — CLI + site | `pipx install "discord-scraper[web]"` then `discord-stats serve` | the stats site on localhost |
 | 3 — Container | `docker run -v ./data:/data --env-file .env discord-scraper` | the same site, with neither Python nor Node installed on the host |
 
 The container's home is the volume (`DISCORD_SCRAPER_HOME=/data`), so
@@ -45,7 +45,7 @@ python3 analysis.py                  # default report: charts + text dump
 # 3. tier 2: the site
 pip install -e ".[web]"
 discord-scraper rollups rebuild --db output/messages.db
-discord-scraper serve                # http://127.0.0.1:8000
+discord-stats serve                # http://127.0.0.1:8000
 ```
 
 Only the scrape needs `DISCORD_TOKEN`; the analysis and the site read the local
@@ -325,7 +325,7 @@ serves from the same port.
 ```bash
 discord-scraper rollups rebuild --db output/messages.db  # required before the site has anything to show
 discord-scraper rollups status --db output/messages.db   # row counts + current/stale per family
-discord-scraper serve                                    # API + ingest worker + the built SPA, :8000
+discord-stats serve                                    # the dashboard API and SPA, :8000
 ```
 
 `rollups` reads a database you name with `--db`, so it works against a copy
@@ -366,7 +366,7 @@ search. Everything else returns numbers.
 - A viewer is the admin id, anyone with an explicit `allow` row, or anybody who
   has posted. An admin is `ADMIN_DISCORD_ID`. Sessions are rows in SQLite,
   stored hashed, so they are revocable.
-- For a quick look on a phone there is `discord-scraper serve --dev-login`,
+- For a quick look on a phone there is `discord-stats serve --dev-login`,
   which enables `/auth/dev-login` and signs anyone who can reach the port in as
   viewer or admin. **Development only** — it prints a warning, and it must never
   be used on a public host.
