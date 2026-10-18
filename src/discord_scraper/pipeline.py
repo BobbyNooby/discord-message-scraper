@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 # `Config` (the resume tests build one) or the app `Config` with the operator
 # overrides already resolved — that is what `worker.jobs._ingest` hands down.
 from discord_scraper.config import Config as AppConfig, load_config as load_app_config
-from discord_scraper.scraper.api import fetch_messages
+from discord_scraper.scraper.api import AuthError, fetch_messages
 from discord_scraper.scraper.config import (
     DB_PATH,
     REQUEST_DELAY_S,
@@ -105,6 +105,15 @@ def _progress(fetched: int, start: float, conn) -> str:
     rate = fetched / elapsed if elapsed else 0.0
     in_db = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
     return f"{_fmt_dur(elapsed)} elapsed | {rate:.1f} msg/s | db: {in_db:,}"
+
+
+def _has_stored_messages(conn) -> bool:
+    """True once at least one message is in the database.
+
+    The resume hint is only honest when a previous or partial run left
+    something behind; a failure on the very first batch has nothing to resume.
+    """
+    return conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0] > 0
 
 
 def catch_up(conn, cfg: ScraperConfig | AppConfig, budget: Budget, start: float) -> int:
@@ -248,7 +257,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     except (RuntimeError, KeyboardInterrupt) as e:
         print(f"\nStopped: {e}")
-        print("Progress is saved — re-run the script to resume.")
+        # Only promise a resume when there is something stored to resume from,
+        # and never for an auth failure: a dead token just fails again.
+        if not isinstance(e, AuthError) and _has_stored_messages(conn):
+            print("Progress is saved — re-run the script to resume.")
         return 1
     finally:
         conn.close()
