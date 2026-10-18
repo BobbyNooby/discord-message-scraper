@@ -45,15 +45,15 @@ discord-scraper serve                # http://127.0.0.1:8000
 ```
 
 Only the scrape needs `DISCORD_TOKEN`; the analysis and the site read the local
-database. A scrape with no messages in it yet leaves the analysis with nothing
-to report, so run the scrape to completion first. The named analyses
-(`stats`, `top-authors`, …) are in [Analysis](#analysis).
+database. An empty database is not a crash: the analysis prints
+`no messages yet — run a scrape first`, so run the scrape to completion first.
+The named analyses (`stats`, `top-authors`, …) are in [Analysis](#analysis).
 
 ## Layout
 
 ```
 main.py               `python3 main.py scrape` — puts src/ on the path, no install
-analysis.py           `python3 analysis.py` — the default report, same trick
+analysis.py           `python3 analysis.py` — shim for the default report only
 config.example.toml   copy to config.toml (settings; gitignored)
 .env.example          copy to .env (secrets only; gitignored)
 stopwords.d/          your own *.txt word lists, if any (optional)
@@ -193,26 +193,31 @@ Two layers: a no-coding CLI and a Python wrapper for developing your own analysi
 
 ### CLI
 
-From the checkout these run as a module, with `src/` on the path; once the
-package is installed (`pip install -e .`) drop the `PYTHONPATH=src` prefix.
+Once installed (`pip install -e .`) the analysis commands are subcommands of
+`discord-scraper`:
 
 ```sh
-python3 analysis.py                                                    # default report: charts + text dump
-PYTHONPATH=src python3 -m discord_scraper.analysis stats
-PYTHONPATH=src python3 -m discord_scraper.analysis report --bucket auto # auto bucket from the data span
-PYTHONPATH=src python3 -m discord_scraper.analysis activity --by month # or day / hour
-PYTHONPATH=src python3 -m discord_scraper.analysis top-authors --limit 10
-PYTHONPATH=src python3 -m discord_scraper.analysis reactions           # emoji leaderboard (raw JSON)
-PYTHONPATH=src python3 -m discord_scraper.analysis attachments         # file-type breakdown (raw JSON)
-PYTHONPATH=src python3 -m discord_scraper.analysis mentions            # most-@'d people (raw JSON)
-PYTHONPATH=src python3 -m discord_scraper.analysis most-replied
-PYTHONPATH=src python3 -m discord_scraper.analysis search "some text"
-PYTHONPATH=src python3 -m discord_scraper.analysis top-words --author exampleuser  # word frequency
-PYTHONPATH=src python3 -m discord_scraper.analysis emoji               # emoji used in message text
+discord-scraper analyze                                                # default report: charts + text dump
+discord-scraper analyze stats
+discord-scraper analyze report --bucket auto # auto bucket from the data span
+discord-scraper analyze activity --by month # or day / hour
+discord-scraper analyze top-authors --limit 10
+discord-scraper analyze reactions           # emoji leaderboard (raw JSON)
+discord-scraper analyze attachments         # file-type breakdown (raw JSON)
+discord-scraper analyze mentions            # most-@'d people (raw JSON)
+discord-scraper analyze most-replied
+discord-scraper analyze search "some text"
+discord-scraper analyze top-words --author exampleuser  # word frequency
+discord-scraper analyze emoji               # emoji used in message text
 ```
 
-`analysis.py` (and the `report` command) with no command generates
-`output/report/` in both **words** and **messages** modes:
+From a bare checkout the same commands run as a module with `src/` on the path
+(`PYTHONPATH=src python3 -m discord_scraper.analysis stats`). `python3
+analysis.py` is the checkout shim for the default report only — it takes no
+arguments, so use the subcommands above for a named analysis.
+
+`discord-scraper analyze` (or `discord-scraper analyze report`) with no other
+arguments generates `output/report/` in both **words** and **messages** modes:
 
 - `words_pie.png` / `messages_pie.png` — share per user
 - `words_over_time.png` / `messages_over_time.png` — per day/month/year,

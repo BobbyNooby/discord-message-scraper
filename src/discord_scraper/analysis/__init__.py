@@ -1,18 +1,24 @@
 """Analysis toolkit for output/messages.db.
 
-CLI — no coding needed:
-    python3 analysis.py                     # default report: pies + timelines
-    python3 -m analysis stats
-    python3 -m analysis activity --by month
-    python3 -m analysis top-authors --limit 10
-    python3 -m analysis reactions
-    python3 -m analysis search "hello"
+CLI — no coding needed. Installed (`pip install -e .`):
+    discord-scraper analyze stats
+    discord-scraper analyze activity --by month
+    discord-scraper analyze top-authors --limit 10
+    discord-scraper analyze reactions
+    discord-scraper analyze search "hello"
+    discord-scraper analyze                 # no command = the default report
+
+From a bare checkout, the same commands run as a module with ``src/`` on the
+path; ``analysis.py`` is the shim for the default report only:
+    PYTHONPATH=src python3 -m discord_scraper.analysis stats
+    python3 analysis.py
 
 Import — for notebooks / scripts:
-    from analysis import MessageDB, top_authors
-    rows = top_authors()          # list[sqlite3.Row]
+    from discord_scraper.analysis import MessageDB
+    db = MessageDB()
+    db.top_authors(10)          # list[sqlite3.Row]
 
-Every function returns list[sqlite3.Row] so results compose.
+Every query function returns list[sqlite3.Row] so results compose.
 """
 
 from .cli import main
