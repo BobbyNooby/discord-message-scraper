@@ -204,8 +204,8 @@ def db_cfg(seeded_db_path, tmp_path):
 def _client_for(db_cfg, conn, level):
     from fastapi.testclient import TestClient
 
-    from discord_scraper.api.app import create_app
-    from discord_scraper.auth.session import SESSION_COOKIE, establish_session
+    from discord_stats.api.app import create_app
+    from discord_stats.auth.session import SESSION_COOKIE, establish_session
 
     cfg, path = db_cfg
     client = TestClient(create_app(cfg, path))
@@ -233,7 +233,7 @@ def _no_payload_warmup(monkeypatch):
 @pytest.fixture
 def client(db_cfg, conn):
     """An authenticated client — the viewer every read endpoint expects."""
-    from discord_scraper.auth.session import Level
+    from discord_stats.auth.session import Level
 
     return _client_for(db_cfg, conn, Level.VIEWER)
 
@@ -246,7 +246,7 @@ def client_unauthenticated(db_cfg, conn):
 @pytest.fixture
 def viewer_client(client_for):
     """A signed-in viewer — what every read endpoint expects."""
-    from discord_scraper.auth.session import Level
+    from discord_stats.auth.session import Level
 
     return client_for(Level.VIEWER)
 
@@ -254,7 +254,7 @@ def viewer_client(client_for):
 @pytest.fixture
 def admin_client(client_for):
     """A signed-in admin — the only level that may see the admin surface."""
-    from discord_scraper.auth.session import Level
+    from discord_stats.auth.session import Level
 
     return client_for(Level.ADMIN)
 

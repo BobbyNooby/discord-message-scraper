@@ -267,7 +267,7 @@ def test_the_api_boot_adds_the_channel_index(seeded_db_path, tmp_path):
     """Without it, every channel-scoped query scans the whole table."""
     import sqlite3
 
-    from discord_scraper.api.app import create_app
+    from discord_stats.api.app import create_app
     from tests.conftest import cfg_fixture
 
     before = {row[1] for row in sqlite3.connect(seeded_db_path).execute("PRAGMA index_list(messages)")}

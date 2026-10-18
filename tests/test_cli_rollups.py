@@ -184,7 +184,7 @@ def test_serve_has_three_shapes(tmp_path):
 
 def test_an_unbuilt_spa_is_a_hint_not_a_crash(tmp_path, monkeypatch, capsys):
     from discord_scraper import cli as cli_module
-    from discord_scraper.api.deps import connect_writable
+    from discord_stats.api.deps import connect_writable
     from discord_scraper.cli import main
     from discord_scraper.rollups.schema import create_control_tables
 
@@ -261,7 +261,7 @@ def test_the_api_shape_needs_no_discord_token(tmp_path, monkeypatch, capsys):
 
     import uvicorn
 
-    from discord_scraper.api.deps import connect_writable
+    from discord_stats.api.deps import connect_writable
     from discord_scraper.cli import main
     from discord_scraper.rollups.schema import create_control_tables
 
@@ -286,7 +286,7 @@ def test_the_worker_shape_still_insists_on_a_token(tmp_path, monkeypatch, capsys
     also why the first version of this test hung on a live worker loop.
     """
     from discord_scraper import cli as cli_module
-    from discord_scraper.api.deps import connect_writable
+    from discord_stats.api.deps import connect_writable
     from discord_scraper.rollups.schema import create_control_tables
 
     database = tmp_path / "messages.db"
@@ -311,7 +311,7 @@ def test_the_worker_shape_still_insists_on_a_token(tmp_path, monkeypatch, capsys
 
 def test_tls_flags_must_come_as_a_pair(tmp_path, capsys):
     """A certificate without its key would silently serve plain HTTP."""
-    from discord_scraper.api.deps import connect_writable
+    from discord_stats.api.deps import connect_writable
     from discord_scraper.cli import main
     from discord_scraper.rollups.schema import create_control_tables
 
@@ -333,7 +333,7 @@ def test_serve_api_without_the_web_extra_names_the_fix(tmp_path, monkeypatch, ca
     """
     import builtins
 
-    from discord_scraper.api.deps import connect_writable
+    from discord_stats.api.deps import connect_writable
     from discord_scraper.cli import main
     from discord_scraper.rollups.schema import create_control_tables
 
