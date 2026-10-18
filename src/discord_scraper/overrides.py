@@ -58,7 +58,7 @@ def validate(key: str, value: Any) -> None:
         if not is_timezone(str(value)):
             raise InvalidOverride(
                 f'unknown timezone: {value} (use an IANA name like '
-                '"Asia/Kuala_Lumpur", or "auto")',
+                '"Europe/London", or "auto")',
             )
     elif key == "allowlist_policy" and str(value) not in ALLOWLIST_MODES:
         raise InvalidOverride(

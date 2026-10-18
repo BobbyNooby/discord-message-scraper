@@ -271,7 +271,7 @@ def _settings_from(raw: dict[str, Any], root: Path) -> Settings:
     if not is_timezone(timezone):
         raise SystemExit(
             f'source.timezone: "{timezone}" is not an IANA timezone name '
-            '(try "Asia/Kuala_Lumpur", or "auto" for the host zone)'
+            '(try "Europe/London", or "auto" for the host zone)'
         )
 
     raw_count_types = source.get("count_types", DEFAULT_COUNT_TYPES)
