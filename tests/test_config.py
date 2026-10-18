@@ -100,9 +100,10 @@ def test_the_example_config_actually_loads(tmp_path):
     example = shutil.copy("config.example.toml", tmp_path / "config.toml")
     text = example.read_text().replace('channel_id = ""', 'channel_id = "123"')
     example.write_text(text)
-    # The template names ``dir = "./stopwords.d"``; a deployment that keeps it
-    # has to create the directory, and validation insists on that.
-    (tmp_path / "stopwords.d").mkdir()
+    # The template names ``dir = "./stopwords.d"`` and no such directory exists
+    # beside a copied config. That must not stop the example from loading: the
+    # extra word lists are optional, and a fresh checkout has to get past this.
+    assert not (tmp_path / "stopwords.d").exists()
 
     settings = load_settings(config_path=example)
     assert settings.channel_id == "123"
@@ -224,9 +225,26 @@ def test_a_negative_media_top_n_is_rejected(tmp_path, monkeypatch):
     assert "0" in message
 
 
-def test_a_stopwords_dir_that_does_not_exist_is_rejected(tmp_path, monkeypatch):
-    message = _reject(tmp_path, monkeypatch, '[stopwords]\ndir = "missing.d"\n')
-    assert "stopwords.dir" in message
+def test_a_stopwords_dir_that_does_not_exist_is_ignored_with_a_warning(
+    tmp_path, monkeypatch, capsys
+):
+    """An optional refinement must not block a scrape.
+
+    The example template ships ``dir = "./stopwords.d"``; copying it to any
+    directory but the checkout used to exit here. The packaged packs still load,
+    so the loader names the missing path and carries on.
+    """
+    monkeypatch.setenv("DISCORD_TOKEN", "t")
+    (tmp_path / "config.toml").write_text(
+        '[source]\nchannel_id = "1"\n[stopwords]\ndir = "missing.d"\n',
+        encoding="utf-8",
+    )
+    cfg = load_config(env_path=tmp_path / ".env", config_path=tmp_path / "config.toml")
+    assert cfg.stopword_dir == tmp_path / "missing.d"
+    warning = capsys.readouterr().err
+    assert "stopwords.dir" in warning
+    assert "missing.d" in warning
+    assert str(tmp_path / "missing.d") in warning
 
 
 def test_a_stopwords_dir_that_is_not_a_path_is_rejected(tmp_path, monkeypatch):

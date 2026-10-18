@@ -11,6 +11,7 @@ values rather than code.
 from __future__ import annotations
 
 import os
+import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -355,8 +356,15 @@ def _settings_from(raw: dict[str, Any], root: Path) -> Settings:
         if not stopword_dir.is_absolute():
             stopword_dir = root / stopword_dir
         if not stopword_dir.is_dir():
-            raise SystemExit(
-                f'stopwords.dir: "{stop_dir}" is not an existing directory'
+            # Extra word lists are a refinement, not a requirement: a config
+            # kept away from the checkout used to die here for a directory it
+            # only optionally needed. The packaged packs still load, so say
+            # what is missing and carry on.
+            print(
+                f'warning: stopwords.dir: "{stop_dir}" is not a directory '
+                f"({stopword_dir}) — ignoring it and continuing with the "
+                "packaged word packs; create the directory to add your own",
+                file=sys.stderr,
             )
     else:
         stopword_dir = root / "stopwords.d"
