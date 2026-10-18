@@ -1,4 +1,4 @@
-"""Configuration: constants, paths, and .env loading."""
+"""Configuration: constants, paths, and batch-size validation."""
 
 from __future__ import annotations
 
@@ -49,7 +49,6 @@ def resolve_db_path(home: Path | None = None, env: dict | None = None) -> Path:
 
 
 PROJECT_DIR = resolve_home()
-ENV_PATH = PROJECT_DIR / ".env"
 DB_PATH = resolve_db_path()
 OUTPUT_DIR = DB_PATH.parent
 
@@ -72,28 +71,3 @@ def normalize_batch_size(value) -> int:
             f"BATCH_SIZE must be 1-{BATCH_SIZE_MAX} (Discord's API maximum is {BATCH_SIZE_MAX})"
         )
     return n
-
-
-def load_config() -> Config:
-    env = _load_env_file()
-    token = env.get("DISCORD_TOKEN")
-    channel_id = env.get("CHANNEL_ID")
-    if not token or not channel_id:
-        raise SystemExit(
-            "Missing DISCORD_TOKEN or CHANNEL_ID. Copy .env.example to .env and fill them in."
-        )
-    batch_size = normalize_batch_size(env.get("BATCH_SIZE", BATCH_SIZE))
-    return Config(token=token, channel_id=channel_id, batch_size=batch_size)
-
-
-def _load_env_file() -> dict:
-    """Minimal .env loader; real environment variables take precedence."""
-    env = dict(os.environ)
-    if ENV_PATH.exists():
-        for line in ENV_PATH.read_text().splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            env.setdefault(key.strip(), value.strip())
-    return env

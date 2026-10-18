@@ -19,7 +19,6 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from discord_scraper.scraper.config import BATCH_SIZE, PROJECT_DIR, normalize_batch_size
-from discord_scraper.scraper.config import Config as ScraperConfig
 
 DEFAULT_APP_NAME = "Discord Scraper"
 DEFAULT_TIMEZONE = "UTC"
@@ -182,12 +181,6 @@ class Config:
     @property
     def redirect_uri(self) -> str:
         return self.settings.redirect_uri
-
-    def scraper(self) -> ScraperConfig:
-        """The three fields the scrape pipeline actually needs."""
-        return ScraperConfig(
-            token=self.token, channel_id=self.channel_id, batch_size=self.batch_size
-        )
 
 
 def _load_env_file(env_path: Path) -> dict[str, str]:
