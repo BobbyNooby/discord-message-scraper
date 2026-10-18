@@ -230,6 +230,7 @@ CONTROL_TABLES: tuple[str, ...] = (
     "config",
     "worker_state",
     "identity",
+    "token_checks",
 )
 
 CONTROL_DDL = """
@@ -326,6 +327,26 @@ CREATE TABLE IF NOT EXISTS identity (
   account_id   TEXT NOT NULL,
   note         TEXT,
   PRIMARY KEY (channel_id, account_id)
+);
+
+-- On-demand token/channel checks an admin runs. Append-only because the board
+-- wants both the latest answer and a short history of failures; pruned on write
+-- so it cannot grow without bound. Only the account's public identity is kept —
+-- never the token itself, which is why no column here could hold one.
+CREATE TABLE IF NOT EXISTS token_checks (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  checked_at       TEXT NOT NULL,
+  ok               INTEGER NOT NULL,
+  http_status      INTEGER,
+  bot_id           TEXT,
+  bot_username     TEXT,
+  bot_global_name  TEXT,
+  bot_avatar_url   TEXT,
+  error            TEXT,
+  channel_id       TEXT,
+  channel_ok       INTEGER,
+  channel_name     TEXT,
+  channel_error    TEXT
 );
 """
 
