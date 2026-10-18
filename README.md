@@ -57,7 +57,7 @@ The named analyses (`stats`, `top-authors`, …) are in [Analysis](#analysis).
 
 ```
 main.py               `python3 main.py scrape` — puts src/ on the path, no install
-analysis.py           `python3 analysis.py` — shim for the default report only
+analysis.py           `python3 analysis.py` — shim for the analysis CLI, no install
 config.example.toml   copy to config.toml (settings; gitignored)
 .env.example          copy to .env (secrets only; gitignored)
 stopwords.d/          your own *.txt word lists, if any (optional)
@@ -216,9 +216,14 @@ discord-scraper analyze emoji               # emoji used in message text
 ```
 
 From a bare checkout the same commands run as a module with `src/` on the path
-(`PYTHONPATH=src python3 -m discord_scraper.analysis stats`). `python3
-analysis.py` is the checkout shim for the default report only — it takes no
-arguments, so use the subcommands above for a named analysis.
+(`PYTHONPATH=src python3 -m discord_scraper.analysis stats`), or through the
+checkout shim, which forwards its arguments:
+
+```sh
+python3 analysis.py stats
+python3 analysis.py activity --by month
+python3 analysis.py            # no command = the default report
+```
 
 `discord-scraper analyze` (or `discord-scraper analyze report`) with no other
 arguments generates `output/report/` in both **words** and **messages** modes:

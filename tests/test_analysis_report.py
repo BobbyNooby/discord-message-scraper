@@ -59,7 +59,7 @@ def test_default_report_on_an_empty_database_says_so(empty_db, tmp_path):
 
 
 def test_report_function_on_an_empty_database_says_so(empty_db, tmp_path):
-    """The `python3 analysis.py` shim calls this function, not the CLI."""
+    """`python3 analysis.py` with no arguments ends up here, via the CLI."""
     with pytest.raises(SystemExit) as exc:
         report(out_dir=tmp_path / "report")
     assert "no messages yet" in str(exc.value)
