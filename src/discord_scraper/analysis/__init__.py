@@ -9,7 +9,7 @@ CLI — no coding needed. Installed (`pip install -e .`):
     discord-scraper analyze                 # no command = the default report
 
 From a bare checkout, the same commands run as a module with ``src/`` on the
-path; ``analysis.py`` is the shim for the default report only:
+path; ``analysis.py`` is the shim for the default report, and forwards named subcommands:
     PYTHONPATH=src python3 -m discord_scraper.analysis stats
     python3 analysis.py
 
