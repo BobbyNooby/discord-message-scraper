@@ -196,6 +196,73 @@ def test_the_cheap_staleness_check_uses_the_newest_id_only(mem_db):
     assert is_stale(mem_db, "c1", "activity", cheap=True) is True    # a new message is caught
 
 
+def test_a_fresh_control_plane_stamps_the_schema_version(mem_db):
+    from discord_scraper.rollups.schema import SCHEMA_VERSION, SCHEMA_VERSION_KEY
+    from discord_scraper.scraper.database import get_meta
+
+    create_control_tables(mem_db)
+    assert isinstance(SCHEMA_VERSION, int)
+    assert SCHEMA_VERSION_KEY == "schema_version"
+    assert get_meta(mem_db, SCHEMA_VERSION_KEY) == str(SCHEMA_VERSION)
+
+
+def test_an_unstamped_database_reports_none(mem_db):
+    from discord_scraper.rollups.schema import schema_version
+    from discord_scraper.scraper.database import delete_meta
+
+    create_control_tables(mem_db)
+    delete_meta(mem_db, "schema_version")
+    assert schema_version(mem_db) is None
+
+
+def test_a_rebuild_refreshes_an_outdated_stamp(seeded_db_path, tmp_path):
+    import sqlite3
+
+    from discord_scraper.rollups.build import rebuild_all
+    from discord_scraper.rollups.schema import SCHEMA_VERSION, schema_version
+    from discord_scraper.scraper.database import set_meta
+    from tests.conftest import cfg_fixture
+
+    conn = sqlite3.connect(seeded_db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        create_control_tables(conn)
+        create_rollup_tables(conn)
+        set_meta(conn, "schema_version", "0")   # built by an earlier revision
+        rebuild_all(conn, cfg_fixture(tmp_path))
+        assert schema_version(conn) == SCHEMA_VERSION
+    finally:
+        conn.close()
+
+
+def test_a_database_without_a_meta_table_reports_none_then_takes_the_stamp():
+    """A pre-`meta` database is unstamped, not broken: reading is honest and a
+    build can still stamp it."""
+    import sqlite3
+
+    from discord_scraper.rollups.schema import SCHEMA_VERSION, schema_version
+
+    conn = sqlite3.connect(":memory:")
+    try:
+        assert schema_version(conn) is None
+        create_control_tables(conn)
+        assert schema_version(conn) == SCHEMA_VERSION
+    finally:
+        conn.close()
+
+
+def test_migrating_the_control_plane_keeps_an_existing_stamp(mem_db):
+    """A boot/migration must not relabel an old database as current: the whole
+    point of the stamp is to notice exactly that database."""
+    from discord_scraper.rollups.schema import schema_version
+    from discord_scraper.scraper.database import set_meta
+
+    create_control_tables(mem_db)
+    set_meta(mem_db, "schema_version", "0")
+    create_control_tables(mem_db)   # idempotent re-run, as the API boot does
+    assert schema_version(mem_db) == 0
+
+
 def test_the_api_boot_adds_the_channel_index(seeded_db_path, tmp_path):
     """Without it, every channel-scoped query scans the whole table."""
     import sqlite3

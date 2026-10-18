@@ -14,6 +14,19 @@ from __future__ import annotations
 import sqlite3
 from typing import Any, Iterable
 
+from discord_scraper.scraper.database import get_meta, set_meta
+
+# The shape of the rollups and the control plane, as a number. The dashboard
+# reads it from `meta` and warns when it does not recognise the database it was
+# handed: after the repo split there is no package version linking the two, so
+# this stamp is the only guard against a database written by another revision.
+# Bump it whenever a change here makes an older database mean something
+# different — not for additive columns, which `migrate` handles in place.
+SCHEMA_VERSION: int = 1
+
+# The documented key in the `meta` table (the same table the timezone uses).
+SCHEMA_VERSION_KEY = "schema_version"
+
 FAMILIES: tuple[str, ...] = (
     "activity",
     "heat",
@@ -358,6 +371,37 @@ CREATE TABLE IF NOT EXISTS token_checks (
 """
 
 
+def schema_version(conn: sqlite3.Connection) -> int | None:
+    """The library schema this database was built with, or ``None`` if never stamped.
+
+    ``None`` is the honest answer for a database from before this stamp existed;
+    readers must treat it as unknown, not as a mismatch with any particular
+    number. A database predating the ``meta`` table answers ``None`` too rather
+    than raising.
+    """
+    try:
+        raw = get_meta(conn, SCHEMA_VERSION_KEY)
+    except sqlite3.OperationalError:
+        return None   # no meta table yet: an unstamped database, not an error
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def stamp_schema_version(conn: sqlite3.Connection) -> None:
+    """Record the current schema version. Only a build writes this.
+
+    ``meta`` is normally created with the messages schema, but a database from
+    before that table existed still has to take the stamp — so create it here
+    when it is absent.
+    """
+    conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+    set_meta(conn, SCHEMA_VERSION_KEY, str(SCHEMA_VERSION))
+
+
 def create_rollup_tables(conn: sqlite3.Connection) -> None:
     """Create every derived table. Idempotent."""
     conn.executescript(ROLLUP_DDL)
@@ -365,9 +409,21 @@ def create_rollup_tables(conn: sqlite3.Connection) -> None:
 
 
 def create_control_tables(conn: sqlite3.Connection) -> None:
-    """Create the control plane (auth, jobs, worker health, identity). Idempotent."""
+    """Create the control plane (auth, jobs, worker health, identity). Idempotent.
+
+    The schema version is stamped only when the plane is being built for the
+    first time. This same function is the API's boot migration; stamping on
+    every call would relabel a database written by an older library revision as
+    current, which is exactly the drift the stamp exists to expose.
+    """
+    existing = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table'"
+    )}
+    first_build = not (set(CONTROL_TABLES) & existing)
     conn.executescript(CONTROL_DDL)
     migrate(conn)
+    if first_build:
+        stamp_schema_version(conn)
 
 
 def migrate(conn: sqlite3.Connection) -> None:
