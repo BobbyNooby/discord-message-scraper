@@ -88,6 +88,9 @@ def test_serve_refuses_a_second_worker(seeded_db_path, tmp_path, capsys, monkeyp
     from discord_scraper.cli import main
 
     cfg_fixture(tmp_path)
+    # The fixture's .env holds the token; the loader must read that one, not the
+    # checkout's (a fresh clone has none, and the test must not need one).
+    monkeypatch.setattr("discord_scraper.config.PROJECT_DIR", tmp_path)
     # `run_forever` never returns in real life; here it must, so the guard is
     # the only thing under test.
     monkeypatch.setattr("discord_scraper.worker.loop.run_forever",
