@@ -70,22 +70,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     serve.add_argument("--db", default=None, help="path to messages.db (default: output/)")
     serve.add_argument("--config", default=None, help="path to config.toml")
-    serve.add_argument("--host", default="127.0.0.1")
-    serve.add_argument("--port", type=int, default=8000)
-    shape = serve.add_mutually_exclusive_group()
-    shape.add_argument("--all", action="store_true",
-                       help="API + ingest worker in one process (default)")
-    shape.add_argument("--api", action="store_true",
-                       help="HTTP only; run the worker elsewhere (no Discord token needed here)")
-    shape.add_argument("--worker", action="store_true",
-                       help="ingest only; serves no HTTP (keep the token off the web host)")
-    serve.add_argument("--static-dir", default=None,
-                       help="path to the built SPA (default: web/dist)")
-    serve.add_argument("--dev-login", action="store_true",
-                       help="DEV ONLY: enable /auth/dev-login, which signs anyone in")
-    serve.add_argument("--tls-cert", default=None,
-                       help="TLS certificate (PEM) — serve HTTPS, e.g. for a tailnet URL")
-    serve.add_argument("--tls-key", default=None, help="TLS private key (PEM)")
+    serve.add_argument(
+        "--worker",
+        action="store_true",
+        help="run the ingest worker (the only shape this command serves)",
+    )
 
     return parser
 
@@ -127,17 +116,14 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _connect(path: str):
-    import sqlite3
+    """The CLI's writable handle — the same one the API and worker use.
 
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    # WAL is database-level and persistent, but setting it here keeps a rebuild
-    # from opening in rollback mode when it is the first writer after a copy.
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=10000")
-    return conn
+    Was a hand-rolled copy of this, which is how two writers ended up with
+    different pragmas.
+    """
+    from discord_scraper.db import connect_writable
 
-
+    return connect_writable(path)
 def _has_table(conn, name: str) -> bool:
     return conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
@@ -286,16 +272,25 @@ def _rollups(args) -> int:
 
 
 def _serve(args) -> int:
-    """Run the API, with the ingest worker beside it.
+    """Run the ingest worker.
 
-    One process, two roles: the worker is the only writer and the API the only
-    reader, and the worker gets its own connection so a long rebuild never holds
-    a handle the request path needs.
+    HTTP belongs to the dashboard (``discord-stats serve``), so the tool keeps
+    only this shape and the Discord token can live on a machine that serves
+    nothing (spec §4.6).
     """
     from pathlib import Path
 
     from discord_scraper.config import PROJECT_DIR, load_config
     from discord_scraper.scraper.config import DB_PATH
+
+    if not args.worker:
+        # Refuse rather than silently do nothing: there is no HTTP left here.
+        print(
+            "the dashboard is served by the discord-stats package — "
+            "run: discord-stats serve --api",
+            file=sys.stderr,
+        )
+        return 2
 
     database = Path(args.db) if args.db else DB_PATH
     if not database.exists():
@@ -303,43 +298,29 @@ def _serve(args) -> int:
         return 2
     config_path = Path(args.config) if args.config else PROJECT_DIR / "config.toml"
     try:
-        # `--api` serves no worker, so it must not *demand* a Discord token — but
-        # it must still read the other secrets, or the admin list and the OAuth
-        # client secret vanish from exactly the shape meant to run without a token.
         cfg = load_config(config_path=config_path)
     except SystemExit as exc:
         print(str(exc), file=sys.stderr)
         return 2
 
-    if args.worker:
-        # No HTTP at all: the split exists so the Discord token can live on a
-        # machine that serves nothing (spec §4.6).
-        from discord_scraper import locks
-        from discord_scraper.db import connect_writable
-        from discord_scraper.worker.loop import run_forever
+    from discord_scraper import locks
+    from discord_scraper.db import connect_writable
+    from discord_scraper.worker.loop import run_forever
 
-        conn = connect_writable(database)
+    conn = connect_writable(database)
+    try:
+        # One ingest worker per database. Three of these racing on the same
+        # file is how every rebuild started failing; the kernel releases the
+        # lock if this process dies, so there is no stale lock to clear.
         try:
-            # One ingest worker per database. Three of these racing on the same
-            # file is how every rebuild started failing; the kernel releases the
-            # lock if this process dies, so there is no stale lock to clear.
-            try:
-                with locks.hold(database, kind="worker", holder="serve --worker"):
-                    run_forever(conn, cfg)
-            except locks.Busy as exc:
-                print(str(exc), file=sys.stderr)
-                return 2
-        finally:
-            conn.close()
-        return 0
-
-    # The API, the SPA and the login screen are the dashboard's job now — the tool
-    # serves no HTTP, so a tool-only install never needs the web dependencies.
-    print(
-        "the dashboard is served by the discord-stats package — run: discord-stats serve --api",
-        file=sys.stderr,
-    )
-    return 2
+            with locks.hold(database, kind="worker", holder="serve --worker"):
+                run_forever(conn, cfg)
+        except locks.Busy as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+    finally:
+        conn.close()
+    return 0
 
 
 def _find_static(explicit: str | None, *, project_dir=None, package_dir=None) -> Path | None:

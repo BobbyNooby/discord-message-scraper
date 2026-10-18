@@ -3,7 +3,6 @@ import sqlite3
 import pytest
 
 from discord_scraper.cli import main
-from discord_stats.cli import main as stats_main
 from discord_scraper.rollups.schema import FAMILIES
 from tests.conftest import cfg_fixture
 
@@ -158,54 +157,37 @@ def test_a_channel_flag_selects_the_channel(seeded_db_path, capsys):
     assert "no messages" not in capsys.readouterr().out
 
 
-def test_serve_refuses_a_missing_database_without_binding_a_port(tmp_path, capsys):
-    assert main(["serve", "--db", str(tmp_path / "absent.db")]) == 2
-    assert "no database" in capsys.readouterr().err.lower()
-
-
-def test_serve_accepts_host_and_port(tmp_path, capsys):
-    from discord_scraper.cli import build_parser
-
-    parsed = build_parser().parse_args(
-        ["serve", "--db", str(tmp_path / "x.db"), "--host", "0.0.0.0", "--port", "9001"]
-    )
-    assert (parsed.host, parsed.port) == ("0.0.0.0", 9001)
-
-
-def test_serve_has_three_shapes(tmp_path):
+def test_the_tool_serve_refuses_the_http_shapes():
+    """`--api`/`--all` are the dashboard's shapes: the tool's parser rejects them."""
     from discord_scraper.cli import build_parser
 
     parser = build_parser()
-    assert parser.parse_args(["serve", "--db", "x.db"]).api is False
-    assert parser.parse_args(["serve", "--db", "x.db", "--api"]).api is True
-    assert parser.parse_args(["serve", "--db", "x.db", "--worker"]).worker is True
-    with pytest.raises(SystemExit):
-        parser.parse_args(["serve", "--db", "x.db", "--api", "--worker"])
+    for flag in ("--api", "--all"):
+        with pytest.raises(SystemExit):
+            parser.parse_args(["serve", "--db", "x.db", flag])
 
 
-def test_an_unbuilt_spa_is_a_hint_not_a_crash(tmp_path, monkeypatch, capsys):
-    from discord_scraper import cli as cli_module
-    from discord_stats.api.deps import connect_writable
-    from discord_scraper.cli import main
-    from discord_scraper.rollups.schema import create_control_tables
+def test_the_tool_serve_keeps_only_the_worker_flag():
+    from discord_scraper.cli import build_parser
 
-    database = tmp_path / "messages.db"
-    conn = connect_writable(database)
-    create_control_tables(conn)
-    conn.close()
-    from tests.conftest import cfg_fixture
+    parser = build_parser()
+    assert parser.parse_args(["serve", "--worker", "--db", "x.db"]).worker is True
+    for flag in ("--host", "--port", "--static-dir", "--dev-login", "--tls-cert", "--tls-key"):
+        with pytest.raises(SystemExit):
+            parser.parse_args(["serve", "--db", "x.db", flag, "v"])
 
-    cfg_fixture(tmp_path)
-    seen = {}
-    import uvicorn
 
-    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: seen.update(app=app, **kw))
-    # No SPA anywhere: the API still starts, with a hint instead of an error.
-    monkeypatch.setattr(cli_module, "_find_static", lambda explicit, **kw: None)
-    assert stats_main(["serve", "--db", str(database), "--config", str(tmp_path / "config.toml"),
-                 "--api", "--port", "8099"]) == 0
-    assert "no built SPA" in capsys.readouterr().err
-    assert seen["port"] == 8099
+def test_the_tool_serve_without_a_worker_points_at_the_dashboard(capsys):
+    """No `--worker` means no shape at all: refuse loudly, never quietly no-op."""
+    assert main(["serve"]) == 2
+    err = capsys.readouterr().err
+    assert "discord-stats serve --api" in err
+    assert "no database" not in err
+
+
+def test_the_worker_shape_refuses_a_missing_database(tmp_path, capsys):
+    assert main(["serve", "--worker", "--db", str(tmp_path / "absent.db")]) == 2
+    assert "no database" in capsys.readouterr().err.lower()
 
 
 def test_the_database_path_is_settable_by_environment(tmp_path, monkeypatch):
@@ -256,29 +238,6 @@ def test_the_static_dir_is_found_in_either_layout(tmp_path, monkeypatch):
     assert checkout.exists() and packaged.exists()
 
 
-def test_the_api_shape_needs_no_discord_token(tmp_path, monkeypatch, capsys):
-    """`serve --api` is the shape that runs where the token is not allowed to be."""
-    from pathlib import Path
-
-    import uvicorn
-
-    from discord_stats.api.deps import connect_writable
-    from discord_scraper.cli import main
-    from discord_scraper.rollups.schema import create_control_tables
-
-    database = tmp_path / "messages.db"
-    conn = connect_writable(database)
-    create_control_tables(conn)
-    conn.close()
-    # a config with a channel and nothing else — no .env, no token anywhere
-    (tmp_path / "config.toml").write_text(
-        '[source]\nchannel_id = "c1"\ntimezone = "UTC"\n', encoding="utf-8"
-    )
-    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
-    assert stats_main(["serve", "--db", str(database), "--config", str(tmp_path / "config.toml"),
-                 "--api", "--port", "8098"]) == 0
-
-
 def test_the_worker_shape_still_insists_on_a_token(tmp_path, monkeypatch, capsys):
     """The other half of the contract: a worker with no token fails loudly.
 
@@ -287,7 +246,7 @@ def test_the_worker_shape_still_insists_on_a_token(tmp_path, monkeypatch, capsys
     also why the first version of this test hung on a live worker loop.
     """
     from discord_scraper import cli as cli_module
-    from discord_stats.api.deps import connect_writable
+    from discord_scraper.db import connect_writable
     from discord_scraper.rollups.schema import create_control_tables
 
     database = tmp_path / "messages.db"
@@ -308,56 +267,3 @@ def test_the_worker_shape_still_insists_on_a_token(tmp_path, monkeypatch, capsys
         "serve", "--db", str(database), "--config", str(tmp_path / "config.toml"), "--worker",
     ]) == 2
     assert "DISCORD_TOKEN" in capsys.readouterr().err
-
-
-def test_tls_flags_must_come_as_a_pair(tmp_path, capsys):
-    """A certificate without its key would silently serve plain HTTP."""
-    from discord_stats.api.deps import connect_writable
-    from discord_scraper.cli import main
-    from discord_scraper.rollups.schema import create_control_tables
-
-    cfg_fixture(tmp_path)   # never the checkout's untracked config.toml
-    database = tmp_path / "messages.db"
-    conn = connect_writable(database)
-    create_control_tables(conn)
-    conn.close()
-    assert stats_main(["serve", "--db", str(database), "--config", str(tmp_path / "config.toml"),
-                 "--api", "--tls-cert", str(tmp_path / "c.pem")]) == 2
-    assert "together" in capsys.readouterr().err
-
-
-def test_serve_api_without_the_web_extra_names_the_fix(tmp_path, monkeypatch, capsys):
-    """Tier 1 has no uvicorn: `serve --api` must say what to install, not traceback.
-
-    The environment is made to look like a tier-1 install whatever is actually
-    installed here, so the test does not depend on this machine's packages.
-    """
-    import builtins
-
-    from discord_stats.api.deps import connect_writable
-    from discord_scraper.cli import main
-    from discord_scraper.rollups.schema import create_control_tables
-
-    database = tmp_path / "messages.db"
-    conn = connect_writable(database)
-    create_control_tables(conn)
-    conn.close()
-    (tmp_path / "config.toml").write_text(
-        '[source]\nchannel_id = "c1"\ntimezone = "UTC"\n', encoding="utf-8"
-    )
-
-    real_import = builtins.__import__
-
-    def without_uvicorn(name, *args, **kwargs):
-        if name == "uvicorn":
-            raise ModuleNotFoundError("No module named 'uvicorn'", name="uvicorn")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", without_uvicorn)
-
-    code = stats_main(["serve", "--db", str(database), "--config", str(tmp_path / "config.toml"),
-                 "--api", "--port", "8097"])
-    assert code == 2
-    err = capsys.readouterr().err
-    assert 'pip install -e ".[web]"' in err
-    assert "Traceback" not in err
