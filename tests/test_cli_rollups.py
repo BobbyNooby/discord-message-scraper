@@ -16,13 +16,16 @@ def test_status_reports_every_family(seeded_db_path, capsys):
 
 def test_status_is_stale_before_a_rebuild_and_current_after(seeded_db_path, tmp_path, capsys):
     config = cfg_fixture(tmp_path)
-    assert main(["rollups", "status", "--db", str(seeded_db_path)]) == 0
+    # Both calls pin the same `--config` the rebuild used: without it, status
+    # falls back to the checkout's config.toml and compares two different
+    # digests, so the test passed only while the two files happened to agree.
+    config_arg = ["--config", str(tmp_path / "config.toml")]
+    assert main(["rollups", "status", "--db", str(seeded_db_path), *config_arg]) == 0
     assert "stale" in capsys.readouterr().out
 
-    assert main(["rollups", "rebuild", "--db", str(seeded_db_path),
-                 "--config", str(tmp_path / "config.toml")]) == 0
+    assert main(["rollups", "rebuild", "--db", str(seeded_db_path), *config_arg]) == 0
     capsys.readouterr()
-    assert main(["rollups", "status", "--db", str(seeded_db_path)]) == 0
+    assert main(["rollups", "status", "--db", str(seeded_db_path), *config_arg]) == 0
     out = capsys.readouterr().out
     assert "stale" not in out
     assert out.count("current") == len(FAMILIES)
