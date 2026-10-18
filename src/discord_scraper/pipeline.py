@@ -28,12 +28,12 @@ from datetime import datetime, timezone
 # The scrape reads the three fields it needs from either the plain scraper
 # `Config` (the resume tests build one) or the app `Config` with the operator
 # overrides already resolved — that is what `worker.jobs._ingest` hands down.
-from discord_scraper.config import Config as AppConfig
+from discord_scraper.config import Config as AppConfig, load_config as load_app_config
 from discord_scraper.scraper.api import fetch_messages
 from discord_scraper.scraper.config import (
+    DB_PATH,
     REQUEST_DELAY_S,
     Config as ScraperConfig,
-    load_config,
     normalize_batch_size,
 )
 from discord_scraper.scraper.database import (
@@ -189,6 +189,10 @@ def backfill(conn, cfg: ScraperConfig | AppConfig, budget: Budget, start: float)
 
 
 def main(argv: list[str] | None = None) -> int:
+    from dataclasses import replace
+
+    from discord_scraper import overrides
+
     parser = argparse.ArgumentParser(description="Scrape a Discord channel into SQLite.")
     parser.add_argument(
         "--max-batches",
@@ -200,17 +204,33 @@ def main(argv: list[str] | None = None) -> int:
         "--batch-size",
         type=int,
         default=None,
-        help="messages per request, 1-100 (default: BATCH_SIZE in .env, else 50)",
+        help="messages per request, 1-100 (default: source.batch_size in config.toml)",
+    )
+    parser.add_argument(
+        "--config", default=None,
+        help="config.toml to read (default: the checkout's)",
+    )
+    parser.add_argument(
+        "--ignore-overrides", action="store_true",
+        help="scrape exactly what config.toml says, ignoring stored operator overrides",
     )
     args = parser.parse_args(argv)
 
-    cfg = load_config()
-    if args.batch_size is not None:
-        cfg.batch_size = normalize_batch_size(args.batch_size)
+    # Settings come from config.toml, overrides from the control plane; the API
+    # and the rebuild resolve through the same authority, so a saved channel
+    # changes what is fetched and not only what the board reads.
+    cfg: AppConfig = load_app_config(config_path=args.config)
     conn = open_db()
+    if not args.ignore_overrides:
+        cfg = overrides.effective_for(conn, cfg)
+    if args.batch_size is not None:
+        # An explicit flag is an explicit instruction: it beats the file and a
+        # stored override alike.
+        size = normalize_batch_size(args.batch_size)
+        cfg = replace(cfg, settings=replace(cfg.settings, batch_size=size))
     budget = Budget(args.max_batches)
 
-    print(f"Scraping channel {cfg.channel_id} into output/messages.db")
+    print(f"Scraping channel {cfg.channel_id} into {DB_PATH}")
     start = time.monotonic()
     try:
         catch_up(conn, cfg, budget, start)
