@@ -115,23 +115,18 @@ def test_the_example_config_actually_loads(tmp_path):
     assert settings.cron_hours == 6
 
 
-def test_the_web_extra_lists_everything_the_server_imports():
-    """A hand-installed dependency is not a declared one.
+def test_the_tool_stays_dependency_free():
+    """The tool is stdlib-only; the web extra lives in discord-message-stats.
 
-    `python-multipart` was installed into the dev venv by hand, so every test
-    passed while a clean install and the container both died on the admin
-    upload's form parsing. The extra is the contract; this pins it.
+    The declared `web` extra used to live here and this test pinned it. It
+    belongs to the dashboard now, which declares and guards it in its own suite.
     """
     import tomllib
     from pathlib import Path
 
     project = tomllib.loads(Path("pyproject.toml").read_text())["project"]
-    extra = " ".join(project["optional-dependencies"]["web"])
-    for package in ("fastapi", "uvicorn", "httpx", "itsdangerous", "apscheduler",
-                    "python-multipart"):
-        assert package in extra, package
-    # tier 1 stays dependency-free
     assert project["dependencies"] == []
+    assert "web" not in project.get("optional-dependencies", {})
 
 
 def test_the_api_only_shape_still_reads_the_other_secrets(tmp_path, monkeypatch):
