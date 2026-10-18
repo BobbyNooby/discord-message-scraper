@@ -37,8 +37,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="scrape exactly what config.toml says, ignoring stored operator overrides",
     )
 
-    analyze = sub.add_parser("analyze", help="run the analysis CLI")
-    analyze.add_argument("args", nargs=argparse.REMAINDER)
+    analyze = sub.add_parser(
+        "analyze",
+        help="run the analysis CLI",
+        description="Run the text analysis CLI: `discord-scraper analyze <command>`. "
+                    "With no command it writes the default report.",
+    )
+    analyze.add_argument(
+        "args", nargs=argparse.REMAINDER,
+        help="analysis command and its options: stats, activity, top-authors, "
+             "reactions, attachments, mentions, most-replied, search, top-words, "
+             "emoji, report",
+    )
 
     rollups = sub.add_parser("rollups", help="build and inspect the rollup tables")
     actions = rollups.add_subparsers(dest="rollup_command", metavar="<action>")
