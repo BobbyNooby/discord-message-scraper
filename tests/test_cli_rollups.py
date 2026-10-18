@@ -315,11 +315,13 @@ def test_tls_flags_must_come_as_a_pair(tmp_path, capsys):
     from discord_scraper.cli import main
     from discord_scraper.rollups.schema import create_control_tables
 
+    cfg_fixture(tmp_path)   # never the checkout's untracked config.toml
     database = tmp_path / "messages.db"
     conn = connect_writable(database)
     create_control_tables(conn)
     conn.close()
-    assert main(["serve", "--db", str(database), "--api", "--tls-cert", str(tmp_path / "c.pem")]) == 2
+    assert main(["serve", "--db", str(database), "--config", str(tmp_path / "config.toml"),
+                 "--api", "--tls-cert", str(tmp_path / "c.pem")]) == 2
     assert "together" in capsys.readouterr().err
 
 
