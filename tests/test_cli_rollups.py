@@ -321,3 +321,40 @@ def test_tls_flags_must_come_as_a_pair(tmp_path, capsys):
     conn.close()
     assert main(["serve", "--db", str(database), "--api", "--tls-cert", str(tmp_path / "c.pem")]) == 2
     assert "together" in capsys.readouterr().err
+
+
+def test_serve_api_without_the_web_extra_names_the_fix(tmp_path, monkeypatch, capsys):
+    """Tier 1 has no uvicorn: `serve --api` must say what to install, not traceback.
+
+    The environment is made to look like a tier-1 install whatever is actually
+    installed here, so the test does not depend on this machine's packages.
+    """
+    import builtins
+
+    from discord_scraper.api.deps import connect_writable
+    from discord_scraper.cli import main
+    from discord_scraper.rollups.schema import create_control_tables
+
+    database = tmp_path / "messages.db"
+    conn = connect_writable(database)
+    create_control_tables(conn)
+    conn.close()
+    (tmp_path / "config.toml").write_text(
+        '[source]\nchannel_id = "c1"\ntimezone = "UTC"\n', encoding="utf-8"
+    )
+
+    real_import = builtins.__import__
+
+    def without_uvicorn(name, *args, **kwargs):
+        if name == "uvicorn":
+            raise ModuleNotFoundError("No module named 'uvicorn'", name="uvicorn")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", without_uvicorn)
+
+    code = main(["serve", "--db", str(database), "--config", str(tmp_path / "config.toml"),
+                 "--api", "--port", "8097"])
+    assert code == 2
+    err = capsys.readouterr().err
+    assert 'pip install -e ".[web]"' in err
+    assert "Traceback" not in err
