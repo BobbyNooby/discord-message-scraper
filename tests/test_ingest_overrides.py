@@ -3,11 +3,23 @@
 The API and the rebuild path both read ``overrides.effective_for``; if ingest
 does not, an admin's saved channel changes what the dashboard reads but not what
 the scraper fetches — the setting looks like it works and silently does not.
-These tests pin the ingest side of that contract for the worker.
+These tests pin the ingest side of that contract for the worker and the CLI.
 """
 
+import sqlite3
+
+from discord_scraper.rollups.schema import create_control_tables, create_rollup_tables
 from discord_scraper.worker.jobs import claim_next, enqueue, run_job
 from tests.conftest import cfg_fixture
+
+
+def _control_tables(path):
+    """The control plane a database needs before it can hold a stored override."""
+    conn = sqlite3.connect(path)
+    create_rollup_tables(conn)
+    create_control_tables(conn)
+    conn.commit()
+    return conn
 
 
 def _set_override(conn, key, value):
@@ -107,3 +119,52 @@ def test_the_loop_enqueues_the_scheduled_ingest_for_the_override_channel(
 
     queued = [row[0] for row in conn.execute("SELECT channel_id FROM jobs")]
     assert queued == ["c2"]
+
+
+def test_the_cli_scrape_fetches_the_override_channel(seeded_db_path, tmp_path, monkeypatch):
+    from discord_scraper import config, pipeline
+    from discord_scraper.cli import main
+    from discord_scraper.scraper import database
+
+    cfg_fixture(tmp_path)                           # the file says "c1"
+    conn = _control_tables(seeded_db_path)
+    _set_override(conn, "channel_id", "c2")
+    conn.close()
+
+    # The `.env` the loader reads by default is the checkout's; point it at the
+    # throwaway one the fixture wrote.
+    monkeypatch.setattr(config, "PROJECT_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", seeded_db_path)
+    monkeypatch.setattr(pipeline, "REQUEST_DELAY_S", 0)
+    calls = []
+    monkeypatch.setattr(pipeline, "fetch_messages", _one_page(calls))
+
+    code = main(["scrape", "--config", str(tmp_path / "config.toml")])
+
+    assert code == 0
+    assert set(calls) == {"c2"}
+
+
+def test_the_cli_scrape_can_ignore_overrides(seeded_db_path, tmp_path, monkeypatch):
+    """The escape hatch: scrape exactly what the file says, on purpose."""
+    from discord_scraper import config, pipeline
+    from discord_scraper.cli import main
+    from discord_scraper.scraper import database
+
+    cfg_fixture(tmp_path)
+    conn = _control_tables(seeded_db_path)
+    _set_override(conn, "channel_id", "c2")
+    conn.close()
+
+    monkeypatch.setattr(config, "PROJECT_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", seeded_db_path)
+    monkeypatch.setattr(pipeline, "REQUEST_DELAY_S", 0)
+    calls = []
+    monkeypatch.setattr(pipeline, "fetch_messages", _one_page(calls))
+
+    code = main([
+        "scrape", "--config", str(tmp_path / "config.toml"), "--ignore-overrides",
+    ])
+
+    assert code == 0
+    assert set(calls) == {"c1"}

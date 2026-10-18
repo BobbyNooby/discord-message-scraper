@@ -26,7 +26,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     scrape.add_argument(
         "--batch-size", type=int, default=None,
-        help="messages per request, 1-100 (default: BATCH_SIZE, else 50)",
+        help="messages per request, 1-100 (default: source.batch_size, else 50)",
+    )
+    scrape.add_argument(
+        "--config", default=None,
+        help="config.toml to read (default: the checkout's)",
+    )
+    scrape.add_argument(
+        "--ignore-overrides", action="store_true",
+        help="scrape exactly what config.toml says, ignoring stored operator overrides",
     )
 
     analyze = sub.add_parser("analyze", help="run the analysis CLI")
@@ -85,6 +93,10 @@ def main(argv: list[str] | None = None) -> int:
             forwarded += ["--max-batches", str(args.max_batches)]
         if args.batch_size is not None:
             forwarded += ["--batch-size", str(args.batch_size)]
+        if args.config is not None:
+            forwarded += ["--config", args.config]
+        if args.ignore_overrides:
+            forwarded.append("--ignore-overrides")
         return pipeline.main(forwarded)
 
     if args.command == "analyze":
