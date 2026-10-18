@@ -40,6 +40,7 @@ from discord_scraper.rollups.schema import (
     create_control_tables,
     create_rollup_tables,
     set_provenance,
+    stamp_schema_version,
 )
 from discord_scraper.text import emoji, links, load_stopwords, tokens
 from discord_scraper.timeutil import local_parts
@@ -774,6 +775,10 @@ def rebuild_all(
             raise
         conn.execute("RELEASE rollup_rebuild")
         conn.commit()
+        # The rebuild is the thing that decides what the numbers mean, so the
+        # stamp belongs with it: a successful build is what makes the database
+        # "this revision" rather than whatever it was before.
+        stamp_schema_version(conn)
     except BaseException as exc:
         # A failed rebuild that left no trace is the silent failure this log
         # exists to prevent, so record it and then re-raise unchanged.
