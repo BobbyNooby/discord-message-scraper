@@ -251,7 +251,7 @@ def test_a_fully_valid_config_still_loads(tmp_path, monkeypatch):
     monkeypatch.setenv("DISCORD_TOKEN", "t")
     (tmp_path / "stopwords.d").mkdir()
     (tmp_path / "config.toml").write_text(
-        '[source]\nchannel_id = "1"\ntimezone = "Asia/Kuala_Lumpur"\n'
+        '[source]\nchannel_id = "1"\ntimezone = "Europe/London"\n'
         "count_types = [0, 19]\n"
         '[stopwords]\ndir = "./stopwords.d"\n'
         "[worker]\ncron_hours = 24\n"
@@ -261,7 +261,7 @@ def test_a_fully_valid_config_still_loads(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     cfg = load_config(env_path=tmp_path / ".env", config_path=tmp_path / "config.toml")
-    assert cfg.timezone == "Asia/Kuala_Lumpur"
+    assert cfg.timezone == "Europe/London"
     assert cfg.count_types == (0, 19)
     assert cfg.cron_hours == 24
     assert cfg.show_recent == 200
@@ -383,7 +383,7 @@ def test_the_timezone_predicate_agrees_with_the_loader():
     from discord_scraper.config import is_timezone
 
     assert is_timezone("auto")
-    assert is_timezone("Asia/Kuala_Lumpur")
+    assert is_timezone("Europe/London")
     assert not is_timezone("GMT+8")
     assert not is_timezone("Mars/Olympus")
 

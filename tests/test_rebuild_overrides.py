@@ -34,12 +34,12 @@ def _zones_on_disk(path):
 
 def test_the_worker_rebuild_records_the_override_zone(conn, seeded_db_path, tmp_path):
     cfg = cfg_fixture(tmp_path, timezone="UTC")
-    _set_override(conn, "timezone", "Asia/Kuala_Lumpur")
+    _set_override(conn, "timezone", "Europe/London")
     enqueue(conn, "c1", "rebuild_rollups")
 
     run_pending(conn, cfg)
 
-    assert _zones_on_disk(seeded_db_path) == {"Asia/Kuala_Lumpur"}
+    assert _zones_on_disk(seeded_db_path) == {"Europe/London"}
     # The file itself is untouched: the override is the difference, not a rewrite.
     assert cfg.timezone == "UTC"
 
@@ -49,12 +49,12 @@ def test_the_cli_rebuild_records_the_override_zone(seeded_db_path, tmp_path):
 
     cfg_fixture(tmp_path, timezone="UTC")
     conn = _control_tables(sqlite3.connect(seeded_db_path))
-    _set_override(conn, "timezone", "Asia/Kuala_Lumpur")
+    _set_override(conn, "timezone", "Europe/London")
     conn.close()
 
     assert main(["rollups", "rebuild", "--db", str(seeded_db_path),
                  "--config", str(tmp_path / "config.toml")]) == 0
-    assert _zones_on_disk(seeded_db_path) == {"Asia/Kuala_Lumpur"}
+    assert _zones_on_disk(seeded_db_path) == {"Europe/London"}
 
 
 def test_the_cli_rebuild_can_ignore_overrides(seeded_db_path, tmp_path):
@@ -63,7 +63,7 @@ def test_the_cli_rebuild_can_ignore_overrides(seeded_db_path, tmp_path):
 
     cfg_fixture(tmp_path, timezone="UTC")
     conn = _control_tables(sqlite3.connect(seeded_db_path))
-    _set_override(conn, "timezone", "Asia/Kuala_Lumpur")
+    _set_override(conn, "timezone", "Europe/London")
     conn.close()
 
     assert main(["rollups", "rebuild", "--db", str(seeded_db_path),
