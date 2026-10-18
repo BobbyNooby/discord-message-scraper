@@ -131,6 +131,39 @@ def test_enqueue_returns_the_job_id(two_conns):
     assert enqueue(conn, "c1", "rebuild_rollups") == 1
 
 
+# --- cancelling a queued job -------------------------------------------------
+
+def test_a_cancelled_job_is_never_claimed(two_conns):
+    from discord_scraper.worker.jobs import CANCELLED, cancel_job
+
+    a, b = two_conns
+    job_id = enqueue(a, "c1", "rebuild_rollups")
+    result = cancel_job(a, job_id)
+    assert result["status"] == CANCELLED
+    assert result["previous_status"] == "queued"
+    assert claim_next(a) is None
+    assert claim_next(b) is None
+
+
+def test_cancelling_a_running_job_is_refused(two_conns):
+    from discord_scraper.worker.jobs import JobRunning, cancel_job
+
+    conn, _other = two_conns
+    enqueue(conn, "c1", "rebuild_rollups")
+    job = claim_next(conn)
+    with pytest.raises(JobRunning):
+        cancel_job(conn, job["id"])
+    assert conn.execute("SELECT status FROM jobs WHERE id = ?",
+                        (job["id"],)).fetchone()["status"] == "running"
+
+
+def test_cancelling_an_unknown_job_is_not_found(two_conns):
+    from discord_scraper.worker.jobs import JobNotFound, cancel_job
+
+    with pytest.raises(JobNotFound):
+        cancel_job(two_conns[0], 4242)
+
+
 # --- running jobs ------------------------------------------------------------
 
 def test_run_job_probe_records_state_and_completes(two_conns, cfg):
