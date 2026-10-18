@@ -107,6 +107,9 @@ def _connect(path: str):
 
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
+    # WAL is database-level and persistent, but setting it here keeps a rebuild
+    # from opening in rollback mode when it is the first writer after a copy.
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=10000")
     return conn
 
