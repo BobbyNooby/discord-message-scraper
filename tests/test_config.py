@@ -173,6 +173,37 @@ def test_requiring_the_token_is_still_the_default(tmp_path, monkeypatch):
         load_config(env_path=tmp_path / ".env", config_path=tmp_path / "config.toml")
 
 
+def test_the_dashboard_may_boot_before_a_channel_is_configured(tmp_path, monkeypatch):
+    """A fresh volume is seeded with an empty channel, and the API must still
+    start: refusing would hide the admin board that is how the operator sets it.
+    """
+    from discord_scraper.config import load_config
+
+    monkeypatch.delenv("DISCORD_TOKEN", raising=False)
+    (tmp_path / ".env").write_text("", encoding="utf-8")
+    (tmp_path / "config.toml").write_text('[source]\nchannel_id = ""\n', encoding="utf-8")
+
+    cfg = load_config(
+        env_path=tmp_path / ".env",
+        config_path=tmp_path / "config.toml",
+        require_token=False,
+        require_channel=False,
+    )
+    assert cfg.channel_id == ""
+
+
+def test_requiring_the_channel_is_still_the_default(tmp_path, monkeypatch):
+    import pytest
+
+    from discord_scraper.config import load_config
+
+    monkeypatch.delenv("DISCORD_TOKEN", raising=False)
+    (tmp_path / ".env").write_text("", encoding="utf-8")
+    (tmp_path / "config.toml").write_text('[source]\nchannel_id = ""\n', encoding="utf-8")
+    with pytest.raises(SystemExit):
+        load_config(env_path=tmp_path / ".env", config_path=tmp_path / "config.toml")
+
+
 # --- values that would otherwise only fail later ------------------------------
 
 

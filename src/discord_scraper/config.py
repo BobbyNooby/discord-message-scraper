@@ -254,7 +254,9 @@ def _bool_setting(key: str, value: Any) -> bool:
     return value
 
 
-def _settings_from(raw: dict[str, Any], root: Path) -> Settings:
+def _settings_from(
+    raw: dict[str, Any], root: Path, *, require_channel: bool = True
+) -> Settings:
     app = raw.get("app", {})
     source = raw.get("source", {})
     stop = raw.get("stopwords", {})
@@ -264,7 +266,10 @@ def _settings_from(raw: dict[str, Any], root: Path) -> Settings:
     media = raw.get("media", {})
 
     channel_id = str(source.get("channel_id") or "").strip()
-    if not channel_id:
+    # The API serves a dashboard whose channel is not configured yet — a fresh
+    # volume, before the operator has a chance to set it. Refusing there would
+    # hide the admin board that is one of the two ways to set it.
+    if not channel_id and require_channel:
         raise SystemExit("Missing source.channel_id in config.toml.")
 
     timezone = str(source.get("timezone", DEFAULT_TIMEZONE))
@@ -422,12 +427,15 @@ def load_config(
     config_path: str | Path | None = None,
     *,
     require_token: bool = True,
+    require_channel: bool = True,
 ) -> Config:
     """Everything the app needs.
 
     ``require_token=False`` is for the API-only shape: it still reads every other
     secret from the environment (the OAuth client secret, the admin id), it just
-    does not insist on a Discord token that shape never uses.
+    does not insist on a Discord token that shape never uses. ``require_channel``
+    is the same idea for ``source.channel_id``: the dashboard boots and warns
+    instead of exiting, so a fresh deployment can be finished from the browser.
     """
     env_file = Path(env_path) if env_path is not None else PROJECT_DIR / ".env"
     toml_file = Path(config_path) if config_path is not None else PROJECT_DIR / "config.toml"
@@ -437,11 +445,13 @@ def load_config(
 
     return Config(
         secrets=_secrets_from(env, require_token=require_token),
-        settings=_settings_from(raw, toml_file.parent),
+        settings=_settings_from(raw, toml_file.parent, require_channel=require_channel),
     )
 
 
-def load_settings(config_path: str | Path | None = None) -> Settings:
+def load_settings(
+    config_path: str | Path | None = None, *, require_channel: bool = True
+) -> Settings:
     """Settings only, no secrets.
 
     A rollup rebuild reads the channel, timezone, stopword and identity settings
@@ -456,7 +466,7 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
             "source.channel_id."
         )
     raw = tomllib.loads(toml_file.read_text(encoding="utf-8"))
-    return _settings_from(raw, toml_file.parent)
+    return _settings_from(raw, toml_file.parent, require_channel=require_channel)
 
 
 def config_from_settings(settings: Settings) -> Config:
