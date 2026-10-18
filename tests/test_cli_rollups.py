@@ -3,6 +3,7 @@ import sqlite3
 import pytest
 
 from discord_scraper.cli import main
+from discord_stats.cli import main as stats_main
 from discord_scraper.rollups.schema import FAMILIES
 from tests.conftest import cfg_fixture
 
@@ -201,7 +202,7 @@ def test_an_unbuilt_spa_is_a_hint_not_a_crash(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: seen.update(app=app, **kw))
     # No SPA anywhere: the API still starts, with a hint instead of an error.
     monkeypatch.setattr(cli_module, "_find_static", lambda explicit, **kw: None)
-    assert main(["serve", "--db", str(database), "--config", str(tmp_path / "config.toml"),
+    assert stats_main(["serve", "--db", str(database), "--config", str(tmp_path / "config.toml"),
                  "--api", "--port", "8099"]) == 0
     assert "no built SPA" in capsys.readouterr().err
     assert seen["port"] == 8099
@@ -274,7 +275,7 @@ def test_the_api_shape_needs_no_discord_token(tmp_path, monkeypatch, capsys):
         '[source]\nchannel_id = "c1"\ntimezone = "UTC"\n', encoding="utf-8"
     )
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
-    assert main(["serve", "--db", str(database), "--config", str(tmp_path / "config.toml"),
+    assert stats_main(["serve", "--db", str(database), "--config", str(tmp_path / "config.toml"),
                  "--api", "--port", "8098"]) == 0
 
 
@@ -320,7 +321,7 @@ def test_tls_flags_must_come_as_a_pair(tmp_path, capsys):
     conn = connect_writable(database)
     create_control_tables(conn)
     conn.close()
-    assert main(["serve", "--db", str(database), "--config", str(tmp_path / "config.toml"),
+    assert stats_main(["serve", "--db", str(database), "--config", str(tmp_path / "config.toml"),
                  "--api", "--tls-cert", str(tmp_path / "c.pem")]) == 2
     assert "together" in capsys.readouterr().err
 
@@ -354,7 +355,7 @@ def test_serve_api_without_the_web_extra_names_the_fix(tmp_path, monkeypatch, ca
 
     monkeypatch.setattr(builtins, "__import__", without_uvicorn)
 
-    code = main(["serve", "--db", str(database), "--config", str(tmp_path / "config.toml"),
+    code = stats_main(["serve", "--db", str(database), "--config", str(tmp_path / "config.toml"),
                  "--api", "--port", "8097"])
     assert code == 2
     err = capsys.readouterr().err

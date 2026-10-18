@@ -1,9 +1,9 @@
 """Command line entry point.
 
 ``scrape`` and ``analyze`` work with no optional dependencies, which is the
-whole point of the base install. ``rollups`` and ``serve`` are wired up by
-later work; they exist in the parser from the start so the help text is
-stable and scriptable.
+whole point of the base install. ``rollups`` inspects the data layer and
+``serve --worker`` runs ingest; the HTTP server belongs to the dashboard
+(``discord-stats serve``), so this module imports no web code.
 """
 
 from __future__ import annotations
@@ -65,7 +65,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--ignore-overrides", action="store_true",
         help="rebuild exactly what config.toml says, ignoring stored operator overrides",
     )
-    serve = sub.add_parser("serve", help="run the web API, the ingest worker and the SPA")
+    serve = sub.add_parser(
+        "serve", help="run the ingest worker (the dashboard is served by discord-stats)"
+    )
     serve.add_argument("--db", default=None, help="path to messages.db (default: output/)")
     serve.add_argument("--config", default=None, help="path to config.toml")
     serve.add_argument("--host", default="127.0.0.1")
@@ -304,7 +306,7 @@ def _serve(args) -> int:
         # `--api` serves no worker, so it must not *demand* a Discord token — but
         # it must still read the other secrets, or the admin list and the OAuth
         # client secret vanish from exactly the shape meant to run without a token.
-        cfg = load_config(config_path=config_path, require_token=not args.api)
+        cfg = load_config(config_path=config_path)
     except SystemExit as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -313,7 +315,7 @@ def _serve(args) -> int:
         # No HTTP at all: the split exists so the Discord token can live on a
         # machine that serves nothing (spec §4.6).
         from discord_scraper import locks
-        from discord_stats.api.deps import connect_writable
+        from discord_scraper.db import connect_writable
         from discord_scraper.worker.loop import run_forever
 
         conn = connect_writable(database)
@@ -331,70 +333,13 @@ def _serve(args) -> int:
             conn.close()
         return 0
 
-    import threading
-
-    try:
-        import uvicorn
-
-        from discord_stats.api.app import create_app
-    except ModuleNotFoundError as exc:
-        # Tier 1 installs have no web dependencies at all; say what to install
-        # instead of letting the import traceback out of the console script.
-        print(
-            f"serve needs the web extra, which is not installed (missing {exc.name}) — "
-            'run: pip install -e ".[web]"',
-            file=sys.stderr,
-        )
-        return 2
-
-    static = _find_static(args.static_dir)
-    if static is None:
-        print(
-            "no built SPA found — serving the API only "
-            "(build it with: cd web && pnpm build)",
-            file=sys.stderr,
-        )
-
-    if args.dev_login:
-        print(
-            "WARNING: --dev-login is on. Anyone who can reach this port can sign in as "
-            "viewer or admin (/auth/dev-login). Never use this on a public host.",
-            file=sys.stderr,
-        )
-    if bool(args.tls_cert) != bool(args.tls_key):
-        # Half a TLS config is a silent downgrade waiting to happen.
-        print("--tls-cert and --tls-key must be given together", file=sys.stderr)
-        return 2
-
-    from contextlib import ExitStack
-
-    from discord_scraper import locks
-
-    with ExitStack() as stack:
-        if not args.api:
-            # A second worker is refused, but the API is still served: the split
-            # deployment (one API process, one worker elsewhere) is legitimate,
-            # and losing ingest beats refusing to serve at all.
-            try:
-                stack.enter_context(
-                    locks.hold(database, kind="worker", holder="serve worker")
-                )
-            except locks.Busy as exc:
-                print(f"{exc} — serving the API without an ingest worker", file=sys.stderr)
-            else:
-                threading.Thread(
-                    target=_worker_thread, args=(cfg, database),
-                    daemon=True, name="ingest-worker",
-                ).start()
-
-        uvicorn.run(
-            create_app(cfg, database, static_dir=static, dev_login=args.dev_login),
-            host=args.host,
-            port=args.port,
-            ssl_certfile=args.tls_cert,
-            ssl_keyfile=args.tls_key,
-        )
-    return 0
+    # The API, the SPA and the login screen are the dashboard's job now — the tool
+    # serves no HTTP, so a tool-only install never needs the web dependencies.
+    print(
+        "the dashboard is served by the discord-stats package — run: discord-stats serve --api",
+        file=sys.stderr,
+    )
+    return 2
 
 
 def _find_static(explicit: str | None, *, project_dir=None, package_dir=None) -> Path | None:
@@ -425,13 +370,3 @@ def _find_static(explicit: str | None, *, project_dir=None, package_dir=None) ->
     return None
 
 
-def _worker_thread(cfg, database) -> None:
-    """Own connection, own loop — a restart of the API does not orphan a job."""
-    from discord_stats.api.deps import connect_writable
-    from discord_scraper.worker.loop import run_forever
-
-    conn = connect_writable(database)
-    try:
-        run_forever(conn, cfg)
-    finally:
-        conn.close()
