@@ -43,31 +43,51 @@ def run_forever(
     Each pass: heartbeat, enqueue a scheduled ingest when one is due, then run
     whatever is queued. The scheduled ingest is enqueued rather than run inline
     so it goes through exactly the same claim path as a manual one.
+
+    Start and stop are logged to the control plane so the live feed can say
+    whether a worker is running at all — the process that can tell you is the
+    one you are looking for.
     """
+    from discord_scraper.rollups.build import record_event
+
+    try:
+        record_event(conn, source="worker", scope="worker", phase="started",
+                     message="worker started")
+    except sqlite3.Error:
+        pass   # a liveness line must not stop the worker from starting
     passes = 0
-    while iterations is None or passes < iterations:
-        record_worker_seen(conn)
-        if schedule_enabled(conn):
-            last = worker_state(conn, "last_ingest_at")
-            if _hours_since(last) >= next_delay_seconds(conn) / 3600:
-                enqueue(conn, cfg.channel_id, "catch_up")
+    try:
+        while iterations is None or passes < iterations:
+            record_worker_seen(conn)
+            if schedule_enabled(conn):
+                last = worker_state(conn, "last_ingest_at")
+                if _hours_since(last) >= next_delay_seconds(conn) / 3600:
+                    enqueue(conn, cfg.channel_id, "catch_up")
+            try:
+                ran = run_pending(conn, cfg)
+            except Exception as exc:
+                # A job failure must not end ingest for the life of the process. A
+                # dead token makes `fetch_messages` raise, and `run_pending`
+                # re-raises by design; without this catch the daemon thread dies and
+                # every later job — including a manual Recalculate — sits queued
+                # until someone restarts the server (spec §10.1, §10.7).
+                failures = int(worker_state(conn, "consecutive_failures") or 0) + 1
+                set_worker_state(conn, "consecutive_failures", failures)
+                set_worker_state(conn, "last_error", f"{type(exc).__name__}: {exc}")
+            else:
+                # Cleared by a job that *ran*, not by an idle pass: an empty queue
+                # is not evidence that the token works again.
+                if ran and (worker_state(conn, "consecutive_failures") or "0") != "0":
+                    set_worker_state(conn, "consecutive_failures", 0)
+            passes += 1
+            if iterations is None or passes < iterations:
+                sleep(poll_seconds)
+        return passes
+    finally:
+        # SIGKILL leaves no stop line, which is honest: an abrupt death is
+        # indistinguishable from a worker that is still running.
         try:
-            ran = run_pending(conn, cfg)
-        except Exception as exc:
-            # A job failure must not end ingest for the life of the process. A
-            # dead token makes `fetch_messages` raise, and `run_pending`
-            # re-raises by design; without this catch the daemon thread dies and
-            # every later job — including a manual Recalculate — sits queued
-            # until someone restarts the server (spec §10.1, §10.7).
-            failures = int(worker_state(conn, "consecutive_failures") or 0) + 1
-            set_worker_state(conn, "consecutive_failures", failures)
-            set_worker_state(conn, "last_error", f"{type(exc).__name__}: {exc}")
-        else:
-            # Cleared by a job that *ran*, not by an idle pass: an empty queue
-            # is not evidence that the token works again.
-            if ran and (worker_state(conn, "consecutive_failures") or "0") != "0":
-                set_worker_state(conn, "consecutive_failures", 0)
-        passes += 1
-        if iterations is None or passes < iterations:
-            sleep(poll_seconds)
-    return passes
+            record_event(conn, source="worker", scope="worker", phase="finished",
+                         message=f"worker stopped after {passes} passes")
+        except sqlite3.Error:
+            pass
