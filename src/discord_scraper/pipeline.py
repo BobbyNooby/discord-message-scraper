@@ -25,10 +25,14 @@ import sys
 import time
 from datetime import datetime, timezone
 
+# The scrape reads the three fields it needs from either the plain scraper
+# `Config` (the resume tests build one) or the app `Config` with the operator
+# overrides already resolved — that is what `worker.jobs._ingest` hands down.
+from discord_scraper.config import Config as AppConfig
 from discord_scraper.scraper.api import fetch_messages
 from discord_scraper.scraper.config import (
     REQUEST_DELAY_S,
-    Config,
+    Config as ScraperConfig,
     load_config,
     normalize_batch_size,
 )
@@ -71,7 +75,7 @@ def _snowflake_ts(snowflake: str) -> datetime:
     )
 
 
-def _span_frac(conn, cfg: Config) -> float:
+def _span_frac(conn, cfg: ScraperConfig | AppConfig) -> float:
     """Share of the channel's lifetime covered by scraped history:
     (newest - oldest) / (newest - channel creation). A rough proxy — message
     density is uneven, so it is not a % of messages. Capped below 100% until
@@ -101,7 +105,7 @@ def _progress(fetched: int, start: float, conn) -> str:
     return f"{_fmt_dur(elapsed)} elapsed | {rate:.1f} msg/s | db: {in_db:,}"
 
 
-def catch_up(conn, cfg: Config, budget: Budget, start: float) -> int:
+def catch_up(conn, cfg: ScraperConfig | AppConfig, budget: Budget, start: float) -> int:
     """Newest-first pass. Fresh DB: this is the full scrape. Re-run: grabs
     anything newer than the DB and stops once a whole batch is already stored
     (we've landed inside scraped history).
@@ -158,7 +162,7 @@ def catch_up(conn, cfg: Config, budget: Budget, start: float) -> int:
     return fetched
 
 
-def backfill(conn, cfg: Config, budget: Budget, start: float) -> int:
+def backfill(conn, cfg: ScraperConfig | AppConfig, budget: Budget, start: float) -> int:
     """Continue deeper history from the oldest stored message, updating the
     resume point after every batch, until the API returns an empty batch."""
     oldest = get_meta(conn, "oldest_id")

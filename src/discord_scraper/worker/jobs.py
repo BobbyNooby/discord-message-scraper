@@ -107,15 +107,19 @@ def claim_next(conn: sqlite3.Connection) -> dict[str, Any] | None:
 
 def _ingest(conn: sqlite3.Connection, cfg: Config, kind: str) -> str:
     """Run the existing scrape path unchanged, then queue a rebuild (spec §10.5)."""
-    from discord_scraper import pipeline
+    from discord_scraper import overrides, pipeline
     from discord_scraper.rollups.build import record_event
 
+    # The same resolution the API and the rebuild use. An overridden channel or
+    # policy must change what is fetched, not only what the board reads; the
+    # whole resolved config is handed down so no later setting drifts again.
+    effective = overrides.effective_for(conn, cfg)
     job = pipeline.catch_up if kind == "catch_up" else pipeline.backfill
     started = time.monotonic()
     record_event(conn, source="worker", scope="ingest", phase="started",
                  message=f"{kind} started")
     try:
-        added = job(conn, cfg.scraper(), pipeline.Budget(None), started)
+        added = job(conn, effective, pipeline.Budget(None), started)
     except Exception as exc:
         record_event(conn, source="worker", scope="ingest", level="error", phase="failed",
                      message=f"{kind} failed: {type(exc).__name__}: {exc}",
@@ -124,7 +128,7 @@ def _ingest(conn: sqlite3.Connection, cfg: Config, kind: str) -> str:
     seconds = round(time.monotonic() - started, 3)
     set_worker_state(conn, "last_ingest_at", _now())
     set_worker_state(conn, "last_ingest_added", added)
-    enqueue(conn, cfg.channel_id, "rebuild_rollups")
+    enqueue(conn, effective.channel_id, "rebuild_rollups")
     # Counts and a duration, never a message: the same privacy line as the rest
     # of the dashboard.
     record_event(conn, source="worker", scope="ingest", phase="finished",
