@@ -140,12 +140,21 @@ def set_job_phase(conn: sqlite3.Connection, job_id: int, phase: str) -> None:
 
 
 def _rebuild(conn: sqlite3.Connection, cfg: Config,
-             on_phase: Callable[[str], None] | None = None) -> str:
-    # The same resolution the API uses, so a rebuild bakes the zone the
-    # dashboard will compare against and the guard stays satisfiable.
-    from discord_scraper import overrides
+             on_phase: Callable[[str], None] | None = None,
+             holder: str = "worker rebuild") -> str:
+    from contextlib import nullcontext
 
-    counts = rebuild_all(conn, overrides.effective_for(conn, cfg), on_phase=on_phase)
+    from discord_scraper import locks, overrides
+
+    # One rebuild at a time. A second one past the busy timeout would die with
+    # `database is locked` and commit nothing, so it refuses up front and names
+    # whoever holds the lock instead.
+    db = locks.database_path(conn)
+    lock = locks.hold(db, kind="rebuild", holder=holder) if db else nullcontext()
+    with lock:
+        # The same resolution the API uses, so a rebuild bakes the zone the
+        # dashboard will compare against and the guard stays satisfiable.
+        counts = rebuild_all(conn, overrides.effective_for(conn, cfg), on_phase=on_phase)
     return f"rebuilt {len(counts)} families"
 
 
@@ -191,6 +200,7 @@ def run_job(
             result = _rebuild(
                 conn, cfg,
                 on_phase=lambda phase: set_job_phase(conn, job["id"], phase),
+                holder=f"worker job #{job['id']}",
             )
         else:
             result = handler(conn, cfg)
