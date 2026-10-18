@@ -30,6 +30,8 @@ batch_size = 50
 # list gets worse because of your chat's language.
 packs = ["en"]
 # Extra *.txt files, one word per line, merged last so they always win.
+# Optional: a directory that does not exist is ignored with a warning, so a
+# copied config still loads. A relative path resolves next to this file.
 dir = "./stopwords.d"
 # Nicknames, in-jokes, anything that is a person rather than a topic.
 # Ships empty: only you know these.
