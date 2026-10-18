@@ -333,9 +333,19 @@ def _serve(args) -> int:
 
     import threading
 
-    import uvicorn
+    try:
+        import uvicorn
 
-    from discord_scraper.api.app import create_app
+        from discord_scraper.api.app import create_app
+    except ModuleNotFoundError as exc:
+        # Tier 1 installs have no web dependencies at all; say what to install
+        # instead of letting the import traceback out of the console script.
+        print(
+            f"serve needs the web extra, which is not installed (missing {exc.name}) — "
+            'run: pip install -e ".[web]"',
+            file=sys.stderr,
+        )
+        return 2
 
     static = _find_static(args.static_dir)
     if static is None:
