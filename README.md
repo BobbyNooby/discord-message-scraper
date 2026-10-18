@@ -156,7 +156,8 @@ months slowly — and it hovers below 100% until the first message is reached.
 ## Tests
 
 ```sh
-python3 -m pip install pytest   # or: pip install -e ".[dev]"
+# the suite spans both tiers, so it needs the web extra beside the test runner
+python3 -m pip install -e ".[dev,web]"
 python3 -m pytest -q
 ```
 
