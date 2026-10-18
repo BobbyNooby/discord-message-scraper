@@ -221,7 +221,17 @@ def _rollups_rebuild(args) -> int:
             cfg = overrides.effective_for(conn, cfg)
         if args.channel:
             cfg = replace(cfg, settings=replace(cfg.settings, channel_id=args.channel))
-        counts = rebuild_all(conn, cfg)
+        from discord_scraper import locks
+
+        # A rebuild started while the worker runs one is the collision that
+        # bricked the live board: refuse it, name the holder, and never let it
+        # fall through to a `database is locked` mid-write.
+        try:
+            with locks.hold(args.db, kind="rebuild", holder="command line rebuild"):
+                counts = rebuild_all(conn, cfg)
+        except locks.Busy as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
     finally:
         conn.close()
 
@@ -277,12 +287,21 @@ def _serve(args) -> int:
     if args.worker:
         # No HTTP at all: the split exists so the Discord token can live on a
         # machine that serves nothing (spec §4.6).
+        from discord_scraper import locks
         from discord_scraper.api.deps import connect_writable
         from discord_scraper.worker.loop import run_forever
 
         conn = connect_writable(database)
         try:
-            run_forever(conn, cfg)
+            # One ingest worker per database. Three of these racing on the same
+            # file is how every rebuild started failing; the kernel releases the
+            # lock if this process dies, so there is no stale lock to clear.
+            try:
+                with locks.hold(database, kind="worker", holder="serve --worker"):
+                    run_forever(conn, cfg)
+            except locks.Busy as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
         finally:
             conn.close()
         return 0
@@ -307,23 +326,39 @@ def _serve(args) -> int:
             "viewer or admin (/auth/dev-login). Never use this on a public host.",
             file=sys.stderr,
         )
-    if not args.api:
-        threading.Thread(
-            target=_worker_thread, args=(cfg, database), daemon=True, name="ingest-worker"
-        ).start()
-
     if bool(args.tls_cert) != bool(args.tls_key):
         # Half a TLS config is a silent downgrade waiting to happen.
         print("--tls-cert and --tls-key must be given together", file=sys.stderr)
         return 2
 
-    uvicorn.run(
-        create_app(cfg, database, static_dir=static, dev_login=args.dev_login),
-        host=args.host,
-        port=args.port,
-        ssl_certfile=args.tls_cert,
-        ssl_keyfile=args.tls_key,
-    )
+    from contextlib import ExitStack
+
+    from discord_scraper import locks
+
+    with ExitStack() as stack:
+        if not args.api:
+            # A second worker is refused, but the API is still served: the split
+            # deployment (one API process, one worker elsewhere) is legitimate,
+            # and losing ingest beats refusing to serve at all.
+            try:
+                stack.enter_context(
+                    locks.hold(database, kind="worker", holder="serve worker")
+                )
+            except locks.Busy as exc:
+                print(f"{exc} — serving the API without an ingest worker", file=sys.stderr)
+            else:
+                threading.Thread(
+                    target=_worker_thread, args=(cfg, database),
+                    daemon=True, name="ingest-worker",
+                ).start()
+
+        uvicorn.run(
+            create_app(cfg, database, static_dir=static, dev_login=args.dev_login),
+            host=args.host,
+            port=args.port,
+            ssl_certfile=args.tls_cert,
+            ssl_keyfile=args.tls_key,
+        )
     return 0
 
 
