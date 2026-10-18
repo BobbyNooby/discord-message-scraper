@@ -21,6 +21,22 @@ from discord_scraper.worker.state import record_worker_seen, set_worker_state, w
 JOB_FIELDS = ("id", "channel_id", "kind", "status", "requested_at", "started_at",
               "finished_at", "result", "error")
 
+# A queued job an admin cleared. `claim_next` only ever takes `queued`, so a
+# cancelled row is skipped by construction rather than by a second check.
+CANCELLED = "cancelled"
+
+
+class JobNotFound(LookupError):
+    """No job with that id."""
+
+
+class JobNotCancellable(RuntimeError):
+    """The job's status is not one an admin may cancel."""
+
+
+class JobRunning(JobNotCancellable):
+    """A job already in flight — refusing is the honest answer."""
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -33,6 +49,43 @@ def enqueue(conn: sqlite3.Connection, channel_id: str, kind: str) -> int:
     )
     conn.commit()
     return int(cursor.lastrowid)
+
+
+def cancel_job(conn: sqlite3.Connection, job_id: int) -> dict[str, Any]:
+    """Clear a queued job, or explain why it cannot be cleared.
+
+    Only ``queued`` is cancellable. A ``running`` rebuild is mid-write and
+    killing it would leave the rollups half-built, so it is refused rather than
+    pretended away. The ``UPDATE ... WHERE status='queued'`` is the real guard:
+    a worker claiming the row between the read and the write wins, and the
+    caller gets the same honest refusal.
+    """
+    job_id = int(job_id)
+    row = conn.execute("SELECT kind, status FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    if row is None:
+        raise JobNotFound(f"no job with id {job_id}")
+    kind, previous = str(row[0]), str(row[1])
+    if previous == CANCELLED:
+        return {"id": job_id, "kind": kind, "status": CANCELLED,
+                "previous_status": CANCELLED, "cancelled_at": None, "already": True}
+    if previous == "running":
+        raise JobRunning(
+            f"job {job_id} ({kind}) is running — a rebuild in flight cannot be "
+            "interrupted safely; wait for it to finish"
+        )
+    if previous != "queued":
+        raise JobNotCancellable(f"job {job_id} is already {previous} — nothing to cancel")
+    now = _now()
+    cursor = conn.execute(
+        "UPDATE jobs SET status = ?, finished_at = ?, phase = ? "
+        "WHERE id = ? AND status = 'queued'",
+        (CANCELLED, now, CANCELLED, job_id),
+    )
+    conn.commit()
+    if cursor.rowcount == 0:
+        raise JobRunning(f"job {job_id} was claimed by the worker before it could be cancelled")
+    return {"id": job_id, "kind": kind, "status": CANCELLED,
+            "previous_status": previous, "cancelled_at": now, "already": False}
 
 
 def claim_next(conn: sqlite3.Connection) -> dict[str, Any] | None:
