@@ -11,6 +11,10 @@ and optionally serve a stats site over it.
 | 2 — CLI + site | `pipx install "discord-scraper[web]"` then `discord-scraper serve` | the full stats site on localhost |
 | 3 — Container | `docker run -v ./data:/data --env-file .env discord-scraper` | the same site, with neither Python nor Node installed on the host |
 
+The container's home is the volume (`DISCORD_SCRAPER_HOME=/data`), so
+`config.toml` belongs in `./data` beside `messages.db`; `--env-file .env`
+injects the secrets and nothing else.
+
 The CLI is tier 1 and stays a first-class interface, not a leftover: it is how
 the tool is useful with zero infrastructure. The web is additive.
 
