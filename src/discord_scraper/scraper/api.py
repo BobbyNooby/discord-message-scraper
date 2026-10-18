@@ -12,6 +12,14 @@ from typing import Any
 from discord_scraper.scraper.config import API_BASE, BATCH_SIZE, USER_AGENT
 
 
+class AuthError(RuntimeError):
+    """Discord refused the token or the channel (HTTP 401/403).
+
+    Kept apart from a generic RuntimeError so callers can tell a credential
+    problem — which a re-run cannot fix — from a transient failure.
+    """
+
+
 def _http_error(code: int, reason: str, what: str) -> str:
     """A readable sentence for an HTTP failure, naming what was being read.
 
@@ -108,7 +116,7 @@ def fetch_messages(token: str, channel_id: str, before: str | None, limit: int =
                 time.sleep(wait)
                 continue
             if e.code in (401, 403):
-                raise RuntimeError("HTTP 401/403: token invalid or channel not accessible")
+                raise AuthError("HTTP 401/403: token invalid or channel not accessible")
             if e.code == 404:
                 raise RuntimeError(f"HTTP 404: channel {channel_id} not found")
             raise RuntimeError(f"HTTP {e.code} {e.reason}: {url}")
