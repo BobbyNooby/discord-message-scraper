@@ -189,8 +189,14 @@ def token_for(conn: sqlite3.Connection, cfg: Config) -> str:
     return current_token(cfg, locks.database_path(conn))
 
 
-def _probe(conn: sqlite3.Connection, cfg: Config) -> str:
-    alive, status = probe_token(conn, token_for(conn, cfg))
+def _probe(conn: sqlite3.Connection, cfg: Config,
+           get: Callable[..., object] | None = None) -> str:
+    was_dead = (worker_state(conn, "token_status") or "").lower() == "dead"
+    alive, status = probe_token(conn, token_for(conn, cfg), get=get)
+    if alive and was_dead:
+        # The pause is over: let the next pass scrape instead of waiting out
+        # the interval the probe itself was counted against.
+        set_worker_state(conn, "last_ingest_attempt_at", "")
     return f"probe: HTTP {status}, token {'alive' if alive else 'not alive'}"
 
 
@@ -307,8 +313,7 @@ def run_job(
         if handler is None:
             raise ValueError(f"unknown job kind: {kind}")
         if kind == "probe" and get is not None:
-            alive, status = probe_token(conn, token_for(conn, cfg), get=get)
-            result = f"probe: HTTP {status}, token {'alive' if alive else 'not alive'}"
+            result = _probe(conn, cfg, get=get)
         elif kind == "rebuild_rollups":
             # A rebuild is the only job that runs for a minute, so it is the one
             # whose phase is worth persisting while it is in flight.

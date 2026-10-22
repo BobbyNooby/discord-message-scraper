@@ -457,17 +457,40 @@ def test_a_401_from_the_feed_marks_the_token_dead_and_pauses_the_schedule(
     from discord_scraper.worker.scheduler import ingest_paused
     from discord_scraper.worker.state import banner_for
 
+    from discord_scraper.worker import probe
+
     conn, other = two_conns
     set_worker_state(conn, "backup_enabled", "false")
     _failing_feed(monkeypatch, AuthError("HTTP 401: token is invalid or revoked", status=401))
     loop.run_forever(conn, cfg, iterations=1, sleep=lambda _s: None)
     assert worker_state(other, "token_status") == "dead"
     assert banner_for(dict(other.execute("SELECT key, value FROM worker_state"))) == "token_dead"
-    # Even long past the delay, a dead token is not retried on a timer.
+    # Long past the delay, a dead token is asked about, not scraped with again.
+    monkeypatch.setattr(probe, "get_current_user", lambda token, timeout: (401, None, "dead"))
     set_worker_state(conn, "last_ingest_attempt_at", "2000-01-01T00:00:00+00:00")
     loop.run_forever(conn, cfg, iterations=1, sleep=lambda _s: None)
     assert ingest_paused(other)
     assert other.execute("SELECT COUNT(*) FROM jobs WHERE kind = 'catch_up'").fetchone()[0] == 1
+    assert other.execute("SELECT COUNT(*) FROM jobs WHERE kind = 'probe'").fetchone()[0] >= 1
+
+
+def test_a_paused_schedule_resumes_once_a_scheduled_probe_says_the_token_works(
+    two_conns, cfg, monkeypatch
+):
+    from discord_scraper.worker import loop
+
+    # A worker that has been running all along: no start-up probe to lean on.
+    conn, other = two_conns
+    set_worker_state(conn, "backup_enabled", "false")
+    set_worker_state(conn, "token_status", "dead")
+    set_worker_state(conn, "last_ingest_at", "2000-01-01T00:00:00+00:00")
+    loop._queue_scheduled_work(conn, cfg)
+    assert [row[0] for row in other.execute("SELECT kind FROM jobs")] == ["probe"]
+    run_job(conn, cfg, claim_next(conn), get=_responder(200))
+    assert worker_state(other, "token_status") == "ok"
+    # The pause is lifted, and the scrape comes on the next pass, not an interval later.
+    loop._queue_scheduled_work(conn, cfg)
+    assert [row[0] for row in other.execute("SELECT kind FROM jobs ORDER BY id")] == ["probe", "catch_up"]
 
 
 def test_a_network_error_does_not_bring_a_dead_token_back(two_conns):
