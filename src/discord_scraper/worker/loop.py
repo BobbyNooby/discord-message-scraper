@@ -75,13 +75,15 @@ def _queue_scheduled_work(conn: sqlite3.Connection, cfg: Config) -> None:
     # admin saved. The schedule falls back to the same resolved config.
     effective = overrides.effective_for(conn, cfg)
     channel = effective.channel_id
-    # No token yet (one can be saved from /admin later), or one the probe
-    # called dead: either way a timed retry can only fail.
-    if (schedule_enabled(conn, effective) and not ingest_paused(conn)
-            and token_for(conn, cfg) and scheduled_ingest_due(conn, effective)):
+    # No token yet (one can be saved from /admin later): nothing to try.
+    if (schedule_enabled(conn, effective) and token_for(conn, cfg)
+            and scheduled_ingest_due(conn, effective)):
         set_worker_state(conn, "last_ingest_attempt_at", _now())
         set_worker_state(conn, "ingest_jitter_seconds", jitter_seconds(conn, cfg=effective))
-        enqueue(conn, channel, "catch_up")
+        # A token the probe called dead is asked about rather than scraped with:
+        # one `/users/@me` per interval, and a working answer lifts the pause,
+        # so a one-off 401 does not stop the schedule until someone notices.
+        enqueue(conn, channel, "probe" if ingest_paused(conn) else "catch_up")
     if scheduled_backup_due(conn):
         set_worker_state(conn, "last_backup_attempt_at", _now())
         enqueue(conn, channel, "backup")
@@ -92,8 +94,13 @@ def _on_start(conn: sqlite3.Connection, cfg: Config) -> None:
     from discord_scraper import overrides
 
     fail_orphaned_jobs(conn)
-    # A token fixed in .env needs a restart to load; this is what notices.
+    # A restart is how a fixed .env or Docker secret is loaded, so ask at once
+    # rather than at the next interval. A token saved from /admin still wins
+    # over both; forgetting it there is what hands the choice back to them.
     if ingest_paused(conn) and token_for(conn, cfg):
+        # Counted as this interval's attempt, so the schedule does not queue a
+        # second probe on the same pass; a working answer clears it again.
+        set_worker_state(conn, "last_ingest_attempt_at", _now())
         enqueue(conn, overrides.effective_for(conn, cfg).channel_id, "probe")
 
 
