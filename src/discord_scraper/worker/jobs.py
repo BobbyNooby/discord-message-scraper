@@ -182,6 +182,40 @@ def _probe(conn: sqlite3.Connection, cfg: Config) -> str:
     return f"probe: HTTP {status}, token {'alive' if alive else 'not alive'}"
 
 
+def fail_orphaned_jobs(conn: sqlite3.Connection) -> int:
+    """Close out jobs a previous worker left ``running`` when it died.
+
+    Only safe because every caller holds the one-worker lock: no other worker
+    can own those rows. A rebuild the CLI is running holds the rebuild lock, so
+    the run log is only closed out when that lock is free.
+    """
+    from discord_scraper import locks
+    from discord_scraper.rollups.build import record_event
+
+    cursor = conn.execute(
+        "UPDATE jobs SET status = 'failed', finished_at = ?, phase = 'failed', "
+        "error = 'the worker stopped before this job finished' WHERE status = 'running'",
+        (_now(),),
+    )
+    conn.commit()
+    try:
+        latest = conn.execute(
+            "SELECT phase FROM rebuild_events WHERE kind = 'run' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        latest = None   # a database that has never been rebuilt has no run log
+    db = locks.database_path(conn)
+    if latest is not None and latest[0] == "started" and db:
+        try:
+            with locks.hold(db, kind="rebuild", holder="worker start"):
+                record_event(conn, source="worker", scope="rebuild", kind="run",
+                             phase="failed", level="error",
+                             message="rebuild interrupted: the worker stopped before it finished")
+        except locks.Busy:
+            pass   # someone is rebuilding right now; that run is not ours to end
+    return int(cursor.rowcount)
+
+
 # Replaced wholesale in tests; the keys are the job kinds.
 DISPATCH: dict[str, Callable[[sqlite3.Connection, Config], str]] = {
     "catch_up": lambda conn, cfg: _ingest(conn, cfg, "catch_up"),

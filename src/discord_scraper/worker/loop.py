@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from discord_scraper.config import Config
-from discord_scraper.worker.jobs import enqueue, run_pending
+from discord_scraper.worker.jobs import enqueue, fail_orphaned_jobs, run_pending
 from discord_scraper.worker.scheduler import (
     delay_after_failures,
     ingest_paused,
@@ -73,6 +73,11 @@ def _queue_scheduled_work(conn: sqlite3.Connection, cfg: Config) -> None:
         enqueue(conn, channel, "catch_up")
 
 
+def _on_start(conn: sqlite3.Connection, cfg: Config) -> None:
+    """Clean up after the last worker."""
+    fail_orphaned_jobs(conn)
+
+
 def run_forever(
     conn: sqlite3.Connection,
     cfg: Config,
@@ -98,6 +103,10 @@ def run_forever(
                      message="worker started")
     except sqlite3.Error:
         pass   # a liveness line must not stop the worker from starting
+    try:
+        _on_start(conn, cfg)
+    except sqlite3.Error:
+        pass   # housekeeping, not a reason to refuse to start
     passes = 0
     try:
         while iterations is None or passes < iterations:
