@@ -17,11 +17,9 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Callable
 
-import httpx
-
+from discord_scraper.scraper.api import get_current_user
 from discord_scraper.worker.state import set_worker_state
 
-ME_URL = "https://discord.com/api/v9/users/@me"
 TIMEOUT = 15.0
 
 
@@ -38,18 +36,18 @@ def probe_token(
     """Ask Discord who this token is. Returns ``(alive, status_code)``.
 
     ``get`` exists so the probe can be tested without a Discord account; every
-    other caller leaves it alone.
+    other caller leaves it alone and goes through the stdlib client, because the
+    tool has no dependencies to lean on.
     """
-    request = get or httpx.get
-    try:
-        response = request(
-            ME_URL,
-            headers={"Authorization": token},
-            timeout=TIMEOUT,
-        )
-        status = int(getattr(response, "status_code", 0))
-    except Exception:
-        status = 0
+    if get is None:
+        answered, _body, _error = get_current_user(token, timeout=TIMEOUT)
+        status = int(answered or 0)
+    else:
+        try:
+            response = get(token=token, timeout=TIMEOUT)
+            status = int(getattr(response, "status_code", 0))
+        except Exception:
+            status = 0
 
     if status == 200:
         set_worker_state(conn, "token_status", "ok")
