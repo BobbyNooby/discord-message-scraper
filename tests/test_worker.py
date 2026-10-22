@@ -717,10 +717,13 @@ def test_a_saved_token_is_owner_only_and_beats_the_environment(tmp_path, cfg):
     db = tmp_path / "output" / "messages.db"
     db.parent.mkdir()
     assert current_token(cfg, db) == cfg.token
+    (db.parent / "secrets").mkdir(mode=0o755)
     path = save_token(db, "  saved-token\n")
     assert path == token_file_for(db)
-    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
-    assert stat.S_IMODE(os.stat(path.parent).st_mode) == 0o700
+    if os.name != "nt":   # Windows ignores these modes; the folder is the boundary there
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+        # A folder that already existed, looser, is tightened rather than trusted.
+        assert stat.S_IMODE(os.stat(path.parent).st_mode) == 0o700
     assert current_token(cfg, db) == "saved-token"
 
 
