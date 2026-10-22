@@ -106,6 +106,19 @@ CREATE TABLE IF NOT EXISTS rollup_word (
 );
 CREATE INDEX IF NOT EXISTS idx_rollup_word ON rollup_word (word);
 
+-- The same counts split by local month, written beside `rollup_word` rather
+-- than replacing it: the all-time table keeps every existing reader working on
+-- a database built before this one existed, and this one answers "when".
+CREATE TABLE IF NOT EXISTS rollup_word_month (
+  channel_id TEXT NOT NULL,
+  word       TEXT NOT NULL,
+  author_id  TEXT NOT NULL,
+  month      TEXT NOT NULL,                -- YYYY-MM, local
+  uses       INTEGER NOT NULL,
+  PRIMARY KEY (channel_id, word, author_id, month)
+);
+CREATE INDEX IF NOT EXISTS idx_rollup_word_month ON rollup_word_month (channel_id, word);
+
 CREATE TABLE IF NOT EXISTS rollup_link (
   channel_id TEXT NOT NULL,
   day        TEXT NOT NULL,
@@ -150,6 +163,21 @@ CREATE TABLE IF NOT EXISTS rollup_media (
     last_seen  TEXT,
     PRIMARY KEY (channel_id, url)
 );
+
+-- Who posted each media URL, by local month: the detail behind "posted 63
+-- times". `first_message_id` is that person's first post of it that month,
+-- which is enough to link back to the very first post overall.
+CREATE TABLE IF NOT EXISTS rollup_media_post (
+    channel_id       TEXT NOT NULL,
+    url              TEXT NOT NULL,
+    author_id        TEXT NOT NULL,
+    month            TEXT NOT NULL,        -- YYYY-MM, local
+    uses             INTEGER NOT NULL,
+    first_seen       TEXT NOT NULL,
+    first_message_id TEXT NOT NULL,
+    PRIMARY KEY (channel_id, url, author_id, month)
+);
+CREATE INDEX IF NOT EXISTS idx_rollup_media_post ON rollup_media_post (channel_id, url);
 
 CREATE TABLE IF NOT EXISTS rollup_emoji (
   channel_id TEXT NOT NULL,

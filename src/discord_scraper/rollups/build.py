@@ -236,6 +236,10 @@ class Derived:
     # times" is a fact about the URL, not about the wrapper around it.
     # [uses, first, last, provider, kind, title, thumbnail, animated]
     media: dict[str, list[Any]] = field(default_factory=dict)
+    # (word, author, month) -> uses: the timeline behind the all-time `words`.
+    word_months: Counter = field(default_factory=Counter)
+    # (url, author, month) -> [uses, first_seen, first_message_id]
+    media_posts: dict[tuple[str, str, str], list[Any]] = field(default_factory=dict)
     emoji: Counter = field(default_factory=Counter)
     reactions: Counter = field(default_factory=Counter)
     attachments: Counter = field(default_factory=Counter)
@@ -335,9 +339,11 @@ def derive(conn: sqlite3.Connection, cfg: Config, ids: Identities,
         if previous is None or (created, str(mid)) < previous:
             d.best_day[day] = (created, str(mid))
 
+        month = day[:7]
         for word in tokens(body):
             if word not in stop:
                 d.words[(word, author)] += 1
+                d.word_months[(word, author, month)] += 1
 
         found_urls = links(body)
         if found_urls:
@@ -384,6 +390,10 @@ def derive(conn: sqlite3.Connection, cfg: Config, ids: Identities,
                     entry[7] = animated
                 if entry[3] == _UNPROVIDENCED and str(provider) != _UNPROVIDENCED:
                     entry[3] = str(provider)
+                post = d.media_posts.setdefault((url, author, month), [0, created, str(mid)])
+                post[0] += 1
+                if (created, str(mid)) < (post[1], post[2]):
+                    post[1], post[2] = created, str(mid)
 
         for reaction in _array(parsed, "reactions"):
             if not isinstance(reaction, dict):
@@ -513,8 +523,20 @@ def rebuild_reply(conn: sqlite3.Connection, cfg: Config, ids: Identities, derive
                   [(cfg.channel_id, parent, child, n) for (parent, child), n in d.replies.items()])
 
 
+def _replace_rows(conn: sqlite3.Connection, table: str, channel_id: str, columns: str,
+                  rows: Iterable[tuple]) -> None:
+    """``_write`` for a table that rides along with a family rather than being one."""
+    conn.execute(f"DELETE FROM {table} WHERE channel_id = ?", (channel_id,))
+    placeholders = ", ".join("?" for _ in range(len(columns.split(","))))
+    conn.executemany(f"INSERT INTO {table} ({columns}) VALUES ({placeholders})", rows)
+
+
 def rebuild_word(conn: sqlite3.Connection, cfg: Config, ids: Identities, derived=None) -> int:
     d = derived or derive(conn, cfg, ids)
+    _replace_rows(conn, "rollup_word_month", cfg.channel_id,
+                  "channel_id, word, author_id, month, uses",
+                  ((cfg.channel_id, word, author, month, n)
+                   for (word, author, month), n in d.word_months.items()))
     return _write(conn, cfg.channel_id, "word", "channel_id, word, author_id, uses",
                   [(cfg.channel_id, word, author, n) for (word, author), n in d.words.items()])
 
@@ -546,6 +568,10 @@ def rebuild_embed_type(conn: sqlite3.Connection, cfg: Config, ids: Identities, d
 
 def rebuild_media(conn: sqlite3.Connection, cfg: Config, ids: Identities, derived=None) -> int:
     d = derived or derive(conn, cfg, ids)
+    _replace_rows(conn, "rollup_media_post", cfg.channel_id,
+                  "channel_id, url, author_id, month, uses, first_seen, first_message_id",
+                  ((cfg.channel_id, url, author, month, uses, first, mid)
+                   for (url, author, month), (uses, first, mid) in d.media_posts.items()))
     return _write(conn, cfg.channel_id,
                   "media",
                   "channel_id, url, provider, kind, title, thumbnail, animated, uses, first_seen, last_seen",
