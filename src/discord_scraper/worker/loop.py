@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from discord_scraper.config import Config
-from discord_scraper.worker.jobs import enqueue, fail_orphaned_jobs, run_pending
+from discord_scraper.worker.jobs import enqueue, fail_orphaned_jobs, run_pending, token_for
 from discord_scraper.worker.scheduler import (
     BACKUP_EVERY_HOURS,
     backup_enabled,
@@ -74,8 +74,10 @@ def _queue_scheduled_work(conn: sqlite3.Connection, cfg: Config) -> None:
     # ingest that names the file's channel would scrape it no matter what the
     # admin saved.
     channel = overrides.effective_for(conn, cfg).channel_id
-    # A token the probe called dead is not retried on a timer: it can only fail.
-    if schedule_enabled(conn) and not ingest_paused(conn) and scheduled_ingest_due(conn):
+    # No token yet (one can be saved from /admin later), or one the probe
+    # called dead: either way a timed retry can only fail.
+    if (schedule_enabled(conn) and not ingest_paused(conn) and token_for(conn, cfg)
+            and scheduled_ingest_due(conn)):
         set_worker_state(conn, "last_ingest_attempt_at", _now())
         set_worker_state(conn, "ingest_jitter_seconds", jitter_seconds(conn))
         enqueue(conn, channel, "catch_up")
@@ -85,8 +87,13 @@ def _queue_scheduled_work(conn: sqlite3.Connection, cfg: Config) -> None:
 
 
 def _on_start(conn: sqlite3.Connection, cfg: Config) -> None:
-    """Clean up after the last worker."""
+    """Clean up after the last worker, and re-check a token it left marked dead."""
+    from discord_scraper import overrides
+
     fail_orphaned_jobs(conn)
+    # A token fixed in .env needs a restart to load; this is what notices.
+    if ingest_paused(conn) and token_for(conn, cfg):
+        enqueue(conn, overrides.effective_for(conn, cfg).channel_id, "probe")
 
 
 def run_forever(

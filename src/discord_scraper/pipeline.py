@@ -30,7 +30,8 @@ from datetime import datetime, timezone
 # The scrape reads the three fields it needs from either the plain scraper
 # `Config` (the resume tests build one) or the app `Config` with the operator
 # overrides already resolved — that is what `worker.jobs._ingest` hands down.
-from discord_scraper.config import Config as AppConfig, load_config as load_app_config
+from discord_scraper.config import Config as AppConfig, current_token
+from discord_scraper.config import load_config as load_app_config
 from discord_scraper.scraper.api import AuthError, fetch_messages
 from discord_scraper.scraper.config import (
     DB_PATH,
@@ -230,7 +231,12 @@ def main(argv: list[str] | None = None) -> int:
     # Settings come from config.toml, overrides from the control plane; the API
     # and the rebuild resolve through the same authority, so a saved channel
     # changes what is fetched and not only what the board reads.
-    cfg: AppConfig = load_app_config(config_path=args.config)
+    cfg: AppConfig = load_app_config(config_path=args.config, require_token=False)
+    # The same token the worker would use: one saved from /admin wins.
+    token = current_token(cfg, DB_PATH)
+    if not token:
+        load_app_config(config_path=args.config)   # exits with the usual message
+    cfg = replace(cfg, secrets=replace(cfg.secrets, token=token))
     conn = open_db()
     if not args.ignore_overrides:
         cfg = overrides.effective_for(conn, cfg)
