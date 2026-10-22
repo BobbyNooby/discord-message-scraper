@@ -97,6 +97,58 @@ def test_the_word_timeline_splits_uses_by_local_month(conn, tmp_path):
     assert query.word_timeline(conn, "c1", "unicorn") == []
 
 
+def test_word_uses_between_months_honour_the_range_and_the_years(conn, cfg):
+    from tests.conftest import author_raw, seed_messages
+    from discord_scraper.rollups import query
+    from discord_scraper.rollups.build import rebuild_word
+    from discord_scraper.rollups.identity import resolve_identities
+
+    seed_messages(conn, [
+        ("p1", "u1", "u1handle", "zebra", "2021-03-05T10:00:00+00:00", None, None, 0, 0,
+         author_raw("u1", "u1handle")),
+        ("p2", "u1", "u1handle", "zebra zebra", "2022-06-05T10:00:00+00:00", None, None, 0, 0,
+         author_raw("u1", "u1handle")),
+        ("p3", "u2", "plain_user", "zebra okapi", "2023-01-05T10:00:00+00:00", None, None, 0, 0,
+         author_raw("u2", "plain_user")),
+    ])
+    rebuild_word(conn, cfg, resolve_identities(conn, cfg))
+    index = {"u1": 0, "u2": 1}
+    every = query.word_author_uses_between(conn, "c1", index)
+    assert every[("zebra", 0)] == 3 and every[("zebra", 1)] == 1
+    ranged = query.word_author_uses_between(conn, "c1", index, "2022-01", "2023-12")
+    assert ranged[("zebra", 0)] == 2 and ranged[("okapi", 1)] == 1
+    # Two years that are not next to each other: 2022 is left out.
+    picked = query.word_author_uses_between(conn, "c1", index, years=(2021, 2023))
+    assert picked[("zebra", 0)] == 1 and picked[("zebra", 1)] == 1
+    # The shared fixture has messages up to 2026; nothing is said after that.
+    assert query.word_author_uses_between(conn, "c1", index, "2027-01", None) == {}
+
+
+def test_word_uses_between_months_is_none_before_a_rebuild(conn):
+    from discord_scraper.rollups import query
+
+    assert query.word_author_uses_between(conn, "c1", {"u1": 0}, "2022-01", "2022-12") is None
+
+
+def test_the_period_query_is_served_from_the_month_index_even_for_years_alone(conn, monkeypatch):
+    """Years with no range used to scan the table by channel: 8 s cold."""
+    from discord_scraper.rollups import query
+
+    conn.execute("INSERT INTO rollup_word_month VALUES ('c1', 'zebra', 'u1', '2022-03', 1)")
+    plans: list[str] = []
+    real_rows = query.rows
+
+    def explain(conn_, sql, params=()):
+        if "rollup_word_month" in sql and "GROUP BY word, author_id" in sql:
+            plans.append(str([tuple(r) for r in conn_.execute("EXPLAIN QUERY PLAN " + sql, params)]))
+        return real_rows(conn_, sql, params)
+
+    monkeypatch.setattr(query, "rows", explain)
+    query.word_author_uses_between(conn, "c1", {"u1": 0}, years=(2021, 2023))
+    assert plans and "idx_rollup_word_month_period" in plans[0]
+    assert "month>" in plans[0] and "month<" in plans[0]
+
+
 def test_word_suggestions_rank_indexed_words_by_use(conn, cfg):
     from tests.conftest import author_raw, seed_messages
     from discord_scraper.rollups import query

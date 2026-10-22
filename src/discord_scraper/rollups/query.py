@@ -338,6 +338,58 @@ def word_timeline(conn, channel_id: str, word: str) -> list[tuple[str, str, int]
                   key=lambda row: (row[0], -row[2], row[1]))
 
 
+def word_author_uses_between(
+    conn,
+    channel_id: str,
+    author_index: dict[str, int],
+    first_month: str | None = None,
+    last_month: str | None = None,
+    years: tuple[int, ...] = (),
+) -> dict[tuple[str, int], int] | None:
+    """``word_author_uses`` for a stretch of local months, ``None`` if not built.
+
+    ``first_month``/``last_month`` are YYYY-MM bounds (inclusive, either may be
+    open) and ``years`` keeps only those calendar years — the same two rules the
+    dashboard's time filter applies to days, at month grain.
+    """
+    if not _built(conn, "rollup_word_month", channel_id):
+        return None
+    if years:
+        # Years alone gave the planner no range on `month`, so it walked the
+        # whole table by channel (8 s cold on the reference database). Bounding
+        # by the first and last year keeps it on the month index; the IN below
+        # still drops the years in between that were not picked.
+        low, high = f"{min(years):04d}-01", f"{max(years):04d}-12"
+        first_month = max(first_month, low) if first_month else low
+        last_month = min(last_month, high) if last_month else high
+    where = ["channel_id = ?"]
+    params: list[Any] = [channel_id]
+    if first_month:
+        where.append("month >= ?")
+        params.append(first_month)
+    if last_month:
+        where.append("month <= ?")
+        params.append(last_month)
+    if years:
+        where.append(f"substr(month, 1, 4) IN ({', '.join('?' for _ in years)})")
+        params.extend(f"{int(year):04d}" for year in years)
+    combined: dict[tuple[str, int], int] = {}
+    for word, author_id, uses in rows(
+        conn,
+        f"""
+        SELECT word, author_id, SUM(uses) FROM rollup_word_month
+         WHERE {' AND '.join(where)} GROUP BY word, author_id
+        """,
+        tuple(params),
+    ):
+        index = author_index.get(author_id)
+        if index is None:
+            continue
+        key = (word, index)
+        combined[key] = combined.get(key, 0) + int(uses)
+    return combined
+
+
 def word_suggestions(conn, channel_id: str, prefix: str, limit: int = 8) -> list[tuple[str, int]]:
     """The most-used indexed words starting with ``prefix``.
 
