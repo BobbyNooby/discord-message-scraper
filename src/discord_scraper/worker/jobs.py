@@ -202,7 +202,10 @@ def _probe(conn: sqlite3.Connection, cfg: Config,
 
 # Each copy is the whole database, so only a few are kept.
 BACKUP_KEEP = 2
-BACKUP_PREFIX = "messages-"
+# `<database stem>-<UTC stamp>.db`. The pattern matches the stamp exactly, so
+# `messages.db` never prunes the copies of a `messages-old.db` beside it.
+BACKUP_STAMP = "%Y%m%dT%H%M%SZ"
+BACKUP_GLOB = "-????????T??????Z.db"
 
 
 def backup_keep(conn: sqlite3.Connection) -> int:
@@ -231,22 +234,36 @@ def _backup(conn: sqlite3.Connection, cfg: Config) -> str:
         return "backup: skipped, the database is in memory"
     folder = Path(db).parent / "backups"
     folder.mkdir(exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    final = folder / f"{BACKUP_PREFIX}{stamp}.db"
+    stem = Path(db).stem
+    # A copy cut short by a crash is nearly the size of the database, on the
+    # same disk; left behind, every one of them is space the next scrape lacks.
+    for stale in folder.glob(f"{stem}{BACKUP_GLOB}.partial"):
+        stale.unlink(missing_ok=True)
+    final = folder / f"{stem}-{datetime.now(timezone.utc).strftime(BACKUP_STAMP)}.db"
     partial = folder / f"{final.name}.partial"
     started = time.monotonic()
-    target = sqlite3.connect(partial)
     try:
-        conn.backup(target)
-    finally:
-        target.close()
-    os.replace(partial, final)
-    copies = sorted(folder.glob(f"{BACKUP_PREFIX}*.db"))
-    for old in copies[:-backup_keep(conn)]:
-        old.unlink()
+        target = sqlite3.connect(partial)
+        try:
+            conn.backup(target)
+        finally:
+            target.close()
+        os.replace(partial, final)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+    # Recorded before pruning: the copy exists whether or not an old one can go.
     set_worker_state(conn, "last_backup_at", _now())
+    kept_back = []
+    for old in sorted(folder.glob(f"{stem}{BACKUP_GLOB}"))[:-backup_keep(conn)]:
+        try:
+            old.unlink()
+        except OSError:
+            # Open in another program (Windows refuses to delete it): next time.
+            kept_back.append(old.name)
     size_mb = final.stat().st_size / 1024 / 1024
-    return f"backup: {final.name}, {size_mb:.0f} MB in {time.monotonic() - started:.1f}s"
+    note = f"; could not remove {', '.join(kept_back)}" if kept_back else ""
+    return f"backup: {final.name}, {size_mb:.0f} MB in {time.monotonic() - started:.1f}s{note}"
 
 
 def fail_orphaned_jobs(conn: sqlite3.Connection) -> int:

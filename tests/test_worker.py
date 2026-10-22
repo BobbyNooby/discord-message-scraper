@@ -623,6 +623,75 @@ def test_a_backup_is_a_readable_copy_and_old_ones_are_pruned(two_conns, cfg):
     assert result.startswith("backup: messages-")
 
 
+def _backups(conn):
+    from pathlib import Path
+
+    from discord_scraper import locks
+
+    folder = Path(locks.database_path(conn)).parent / "backups"
+    folder.mkdir(exist_ok=True)
+    return folder
+
+
+def test_a_failed_backup_leaves_no_partial_copy_behind(two_conns, cfg):
+    from discord_scraper.worker.jobs import _backup
+
+    conn, other = two_conns
+    folder = _backups(conn)
+    (folder / "messages-20200101T000000Z.db.partial").write_bytes(b"left by a crash")
+
+    class Failing:
+        """Delegates to the real connection but fails the copy, like a full disk."""
+
+        def __getattr__(self, name):
+            return getattr(conn, name)
+
+        def backup(self, *_args, **_kwargs):
+            raise sqlite3.OperationalError("database or disk is full")
+
+    with pytest.raises(sqlite3.OperationalError):
+        _backup(Failing(), cfg)
+    assert not list(folder.glob("*.partial"))
+    assert worker_state(other, "last_backup_at") is None
+
+
+def test_backups_of_one_database_never_prune_another(two_conns, cfg):
+    from discord_scraper.worker.jobs import _backup
+
+    conn, _other = two_conns
+    folder = _backups(conn)
+    neighbour = [folder / f"messages-old-2020010{day}T000000Z.db" for day in (1, 2, 3)]
+    for path in neighbour:
+        path.write_bytes(b"")
+    set_worker_state(conn, "backup_keep", "1")
+    _backup(conn, cfg)
+    assert all(path.exists() for path in neighbour)
+    assert len(list(folder.glob("messages-????????T??????Z.db"))) == 1
+
+
+def test_a_copy_that_cannot_be_pruned_does_not_fail_the_backup(two_conns, cfg, monkeypatch):
+    from pathlib import Path
+
+    from discord_scraper.worker.jobs import _backup
+
+    conn, other = two_conns
+    folder = _backups(conn)
+    stuck = folder / "messages-20200101T000000Z.db"
+    stuck.write_bytes(b"")
+    set_worker_state(conn, "backup_keep", "1")
+    real_unlink = Path.unlink
+
+    def unlink(self, *args, **kwargs):
+        if self == stuck:
+            raise PermissionError("open in another program")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+    result = _backup(conn, cfg)
+    assert "could not remove messages-20200101T000000Z.db" in result
+    assert worker_state(other, "last_backup_at")
+
+
 def test_a_backup_is_scheduled_daily(two_conns, cfg, monkeypatch):
     from discord_scraper.worker import loop
 
