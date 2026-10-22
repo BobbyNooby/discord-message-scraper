@@ -122,6 +122,10 @@ def _ingest(conn: sqlite3.Connection, cfg: Config, kind: str) -> str:
     try:
         added = job(conn, effective, pipeline.Budget(None), started)
     except Exception as exc:
+        # Counted apart from `consecutive_failures`, which any job that runs
+        # resets: a rebuild that works says nothing about the next scrape.
+        failures = int(worker_state(conn, "ingest_failures") or 0) + 1
+        set_worker_state(conn, "ingest_failures", failures)
         if isinstance(exc, AuthError) and exc.status == 401:
             # The feed itself just proved the token dead; waiting for the next
             # probe left the public banner green for days.
@@ -135,6 +139,7 @@ def _ingest(conn: sqlite3.Connection, cfg: Config, kind: str) -> str:
     now = _now()
     set_worker_state(conn, "last_ingest_at", now)
     set_worker_state(conn, "last_ingest_added", added)
+    set_worker_state(conn, "ingest_failures", 0)
     # A fetch that worked is as good as a probe.
     set_worker_state(conn, "token_status", "ok")
     set_worker_state(conn, "token_last_ok_at", now)
