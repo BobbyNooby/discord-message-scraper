@@ -23,11 +23,23 @@ MAX_BACKOFF_SECONDS = 24 * 3600
 JITTER_FRACTION = 0.1
 
 
-def schedule_enabled(conn: sqlite3.Connection) -> bool:
-    stored = worker_state(conn, "cron_enabled")
+BACKUP_EVERY_HOURS = 24
+
+
+def _switch(conn: sqlite3.Connection, key: str) -> bool:
+    """On unless the stored value says off."""
+    stored = worker_state(conn, key)
     if stored is None:
         return True
     return str(stored).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def schedule_enabled(conn: sqlite3.Connection) -> bool:
+    return _switch(conn, "cron_enabled")
+
+
+def backup_enabled(conn: sqlite3.Connection) -> bool:
+    return _switch(conn, "backup_enabled")
 
 
 def cron_hours(conn: sqlite3.Connection) -> int:

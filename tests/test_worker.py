@@ -327,6 +327,7 @@ def test_the_loop_enqueues_a_scheduled_ingest_when_due(two_conns, cfg, monkeypat
     from discord_scraper.worker import loop
 
     conn, other = two_conns
+    set_worker_state(conn, "backup_enabled", "false")    # this test is about ingest
     monkeypatch.setitem(loop.__dict__, "run_pending", lambda conn, cfg: 0)
     run_forever = loop.run_forever
     run_forever(conn, cfg, iterations=1, sleep=lambda _s: None)
@@ -338,6 +339,7 @@ def test_a_disabled_schedule_queues_nothing(two_conns, cfg, monkeypatch):
 
     conn, other = two_conns
     set_worker_state(conn, "cron_enabled", "false")
+    set_worker_state(conn, "backup_enabled", "false")
     monkeypatch.setitem(loop.__dict__, "run_pending", lambda conn, cfg: 0)
     loop.run_forever(conn, cfg, iterations=1, sleep=lambda _s: None)
     assert other.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
@@ -360,6 +362,7 @@ def test_the_loop_survives_a_failing_job(two_conns, cfg, monkeypatch):
     monkeypatch.setattr(loop, "schedule_enabled", lambda conn: False)
 
     conn, other = two_conns
+    set_worker_state(conn, "backup_enabled", "false")
     enqueue(conn, "c1", "catch_up")
     enqueue(conn, "c1", "rebuild_rollups")
 
@@ -384,6 +387,7 @@ def test_the_failure_counter_survives_a_pass_with_nothing_to_do(two_conns, cfg, 
     monkeypatch.setattr(loop, "schedule_enabled", lambda conn: False)
 
     conn, other = two_conns
+    set_worker_state(conn, "backup_enabled", "false")
     enqueue(conn, "c1", "catch_up")
     loop.run_forever(conn, cfg, iterations=2, sleep=lambda _s: None)
 
@@ -408,6 +412,7 @@ def test_a_failed_scheduled_ingest_is_not_retried_on_the_next_pass(two_conns, cf
     from discord_scraper.worker import loop
 
     conn, other = two_conns
+    set_worker_state(conn, "backup_enabled", "false")
     _failing_feed(monkeypatch, RuntimeError("HTTP 502 Bad Gateway"))
     loop.run_forever(conn, cfg, iterations=3, sleep=lambda _s: None)
     kinds = [row[0] for row in other.execute("SELECT kind FROM jobs")]
@@ -424,6 +429,7 @@ def test_a_401_from_the_feed_marks_the_token_dead_and_pauses_the_schedule(
     from discord_scraper.worker.state import banner_for
 
     conn, other = two_conns
+    set_worker_state(conn, "backup_enabled", "false")
     _failing_feed(monkeypatch, AuthError("HTTP 401: token is invalid or revoked", status=401))
     loop.run_forever(conn, cfg, iterations=1, sleep=lambda _s: None)
     assert worker_state(other, "token_status") == "dead"
@@ -440,6 +446,7 @@ def test_a_403_from_the_feed_leaves_the_token_alone(two_conns, cfg, monkeypatch)
     from discord_scraper.worker import loop
 
     conn, other = two_conns
+    set_worker_state(conn, "backup_enabled", "false")
     set_worker_state(conn, "token_status", "ok")
     _failing_feed(monkeypatch, AuthError("HTTP 403: no permission", status=403))
     loop.run_forever(conn, cfg, iterations=1, sleep=lambda _s: None)
@@ -487,6 +494,7 @@ def test_jobs_left_running_by_a_dead_worker_are_failed_on_start(two_conns, cfg):
 
     conn, other = two_conns
     set_worker_state(conn, "cron_enabled", "false")
+    set_worker_state(conn, "backup_enabled", "false")
     enqueue(conn, "c1", "rebuild_rollups")
     claim_next(conn)                                  # ...and then the worker died
     record_event(conn, source="worker", scope="rebuild", kind="run", phase="started",
@@ -499,3 +507,45 @@ def test_jobs_left_running_by_a_dead_worker_are_failed_on_start(two_conns, cfg):
         "SELECT phase FROM rebuild_events WHERE kind = 'run' ORDER BY id DESC LIMIT 1"
     ).fetchone()
     assert latest["phase"] == "failed"
+
+
+# --- backups -------------------------------------------------------------------
+
+def test_a_backup_is_a_readable_copy_and_old_ones_are_pruned(two_conns, cfg):
+    from pathlib import Path
+
+    from discord_scraper import locks
+    from discord_scraper.worker.jobs import _backup
+
+    conn, other = two_conns
+    set_worker_state(conn, "backup_keep", "2")
+    folder = Path(locks.database_path(conn)).parent / "backups"
+    folder.mkdir()
+    for stamp in ("20200101T000000Z", "20200102T000000Z"):
+        (folder / f"messages-{stamp}.db").write_bytes(b"")
+    result = _backup(conn, cfg)
+    copies = sorted(p.name for p in folder.glob("messages-*.db"))
+    assert len(copies) == 2 and copies[0] == "messages-20200102T000000Z.db"
+    assert not list(folder.glob("*.partial"))
+    newest = sqlite3.connect(folder / copies[-1])
+    try:
+        assert newest.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == \
+            conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+    finally:
+        newest.close()
+    assert worker_state(other, "last_backup_at")
+    assert result.startswith("backup: messages-")
+
+
+def test_a_backup_is_scheduled_daily(two_conns, cfg, monkeypatch):
+    from discord_scraper.worker import loop
+
+    conn, other = two_conns
+    set_worker_state(conn, "cron_enabled", "false")
+    monkeypatch.setitem(loop.__dict__, "run_pending", lambda conn, cfg: 0)
+    loop.run_forever(conn, cfg, iterations=2, sleep=lambda _s: None)
+    assert [row[0] for row in other.execute("SELECT kind FROM jobs")] == ["backup"]
+    set_worker_state(conn, "backup_enabled", "false")
+    set_worker_state(conn, "last_backup_attempt_at", "2000-01-01T00:00:00+00:00")
+    loop.run_forever(conn, cfg, iterations=1, sleep=lambda _s: None)
+    assert other.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 1
