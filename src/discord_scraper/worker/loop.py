@@ -14,7 +14,7 @@ from typing import Callable
 
 from discord_scraper.config import Config
 from discord_scraper.worker.jobs import enqueue, run_pending
-from discord_scraper.worker.scheduler import next_delay_seconds, schedule_enabled
+from discord_scraper.worker.scheduler import ingest_paused, next_delay_seconds, schedule_enabled
 from discord_scraper.worker.state import record_worker_seen, set_worker_state, worker_state
 
 POLL_SECONDS = 15
@@ -53,7 +53,8 @@ def _queue_scheduled_work(conn: sqlite3.Connection, cfg: Config) -> None:
     # ingest that names the file's channel would scrape it no matter what the
     # admin saved.
     channel = overrides.effective_for(conn, cfg).channel_id
-    if schedule_enabled(conn) and scheduled_ingest_due(conn):
+    # A token the probe called dead is not retried on a timer: it can only fail.
+    if schedule_enabled(conn) and not ingest_paused(conn) and scheduled_ingest_due(conn):
         set_worker_state(conn, "last_ingest_attempt_at", _now())
         enqueue(conn, channel, "catch_up")
 
