@@ -14,10 +14,14 @@ from typing import Callable
 
 from discord_scraper.config import Config
 from discord_scraper.worker.jobs import enqueue, run_pending
-from discord_scraper.worker.scheduler import schedule_enabled, next_delay_seconds
+from discord_scraper.worker.scheduler import next_delay_seconds, schedule_enabled
 from discord_scraper.worker.state import record_worker_seen, set_worker_state, worker_state
 
 POLL_SECONDS = 15
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _hours_since(stamp: str | None) -> float:
@@ -28,6 +32,30 @@ def _hours_since(stamp: str | None) -> float:
     except ValueError:
         return float("inf")
     return (datetime.now(timezone.utc) - then).total_seconds() / 3600
+
+
+def _hours_since_either(conn: sqlite3.Connection, done_key: str, tried_key: str) -> float:
+    # An attempt counts as well as a success. Counting only successes is how a
+    # failing ingest was queued again on every 15-second pass.
+    return min(_hours_since(worker_state(conn, done_key)),
+               _hours_since(worker_state(conn, tried_key)))
+
+
+def scheduled_ingest_due(conn: sqlite3.Connection) -> bool:
+    since = _hours_since_either(conn, "last_ingest_at", "last_ingest_attempt_at")
+    return since * 3600 >= next_delay_seconds(conn)
+
+
+def _queue_scheduled_work(conn: sqlite3.Connection, cfg: Config) -> None:
+    from discord_scraper import overrides
+
+    # The channel the job is queued for must be the effective one: a scheduled
+    # ingest that names the file's channel would scrape it no matter what the
+    # admin saved.
+    channel = overrides.effective_for(conn, cfg).channel_id
+    if schedule_enabled(conn) and scheduled_ingest_due(conn):
+        set_worker_state(conn, "last_ingest_attempt_at", _now())
+        enqueue(conn, channel, "catch_up")
 
 
 def run_forever(
@@ -59,15 +87,7 @@ def run_forever(
     try:
         while iterations is None or passes < iterations:
             record_worker_seen(conn)
-            if schedule_enabled(conn):
-                last = worker_state(conn, "last_ingest_at")
-                if _hours_since(last) >= next_delay_seconds(conn) / 3600:
-                    from discord_scraper import overrides
-
-                    # The channel the job is queued for must be the effective
-                    # one: a scheduled ingest that names the file's channel
-                    # would scrape it no matter what the admin saved.
-                    enqueue(conn, overrides.effective_for(conn, cfg).channel_id, "catch_up")
+            _queue_scheduled_work(conn, cfg)
             try:
                 ran = run_pending(conn, cfg)
             except Exception as exc:
