@@ -304,6 +304,104 @@ def words_for(conn, channel_id: str, word: str) -> list[tuple[str, int]]:
     return sorted(combined.items(), key=lambda row: (-row[1], row[0]))
 
 
+def _built(conn, table: str, channel_id: str) -> bool:
+    """True once a rebuild has written ``table`` for this channel.
+
+    The month tables arrived after the rest, so a database rebuilt before them
+    has none (or an empty one); the caller says "recalculate" instead of
+    showing an empty chart as if nobody ever said the word.
+    """
+    try:
+        return bool(rows(conn, f"SELECT 1 FROM {table} WHERE channel_id = ? LIMIT 1",
+                         (channel_id,)))
+    except sqlite3.OperationalError:
+        return False
+
+
+def word_timeline(conn, channel_id: str, word: str) -> list[tuple[str, str, int]] | None:
+    """``[(month, canonical_author, uses), ...]`` oldest first, or ``None`` if not built."""
+    if not _built(conn, "rollup_word_month", channel_id):
+        return None
+    merge = identity.canonical_map(conn, channel_id)
+    combined: dict[tuple[str, str], int] = {}
+    for month, author_id, uses in rows(
+        conn,
+        """
+        SELECT month, author_id, SUM(uses) FROM rollup_word_month
+         WHERE channel_id = ? AND word = ? GROUP BY month, author_id
+        """,
+        (channel_id, word),
+    ):
+        key = (str(month), merge.get(author_id, author_id))
+        combined[key] = combined.get(key, 0) + int(uses)
+    return sorted(((month, author, uses) for (month, author), uses in combined.items()),
+                  key=lambda row: (row[0], -row[2], row[1]))
+
+
+def word_suggestions(conn, channel_id: str, prefix: str, limit: int = 8) -> list[tuple[str, int]]:
+    """The most-used indexed words starting with ``prefix``.
+
+    A range on the word index rather than ``LIKE``, which SQLite cannot serve
+    from an index while it is case-insensitive. Every word is stored lowercase.
+    """
+    prefix = prefix.strip().lower()
+    if not prefix:
+        return []
+    return [(str(word), int(uses)) for word, uses in rows(
+        conn,
+        """
+        SELECT word, SUM(uses) AS total FROM rollup_word
+         WHERE channel_id = ? AND word >= ? AND word < ?
+         GROUP BY word ORDER BY total DESC, word LIMIT ?
+        """,
+        (channel_id, prefix, prefix + "￿", limit),
+    )]
+
+
+def media_posts(conn, channel_id: str, url: str) -> list[tuple[str, str, int, str, str]] | None:
+    """``[(month, canonical_author, uses, first_seen, first_message_id), ...]`` for one URL.
+
+    Oldest first; ``None`` when the per-person table has not been built yet.
+    """
+    if not _built(conn, "rollup_media_post", channel_id):
+        return None
+    merge = identity.canonical_map(conn, channel_id)
+    combined: dict[tuple[str, str], list[Any]] = {}
+    for month, author_id, uses, first_seen, message_id in rows(
+        conn,
+        """
+        SELECT month, author_id, uses, first_seen, first_message_id FROM rollup_media_post
+         WHERE channel_id = ? AND url = ?
+        """,
+        (channel_id, url),
+    ):
+        key = (str(month), merge.get(author_id, author_id))
+        entry = combined.setdefault(key, [0, str(first_seen), str(message_id)])
+        entry[0] += int(uses)
+        if str(first_seen) < entry[1]:
+            entry[1], entry[2] = str(first_seen), str(message_id)
+    return sorted(((month, author, uses, first, mid)
+                   for (month, author), (uses, first, mid) in combined.items()),
+                  key=lambda row: (row[0], row[3]))
+
+
+def media_item(conn, channel_id: str, url: str) -> list | None:
+    """One ``rollup_media`` row in ``top_media``'s shape, plus first and last seen."""
+    found = rows(
+        conn,
+        """
+        SELECT url, provider, kind, title, thumbnail, animated, uses, first_seen, last_seen
+          FROM rollup_media WHERE channel_id = ? AND url = ?
+        """,
+        (channel_id, url),
+    )
+    if not found:
+        return None
+    url_, provider, kind, title, thumbnail, animated, uses, first_seen, last_seen = found[0]
+    return [str(url_), str(provider), str(kind), str(title or ""), str(thumbnail or ""),
+            str(animated or ""), int(uses or 0), first_seen, last_seen]
+
+
 def distinct_word_count(conn, channel_id: str) -> int:
     found = rows(conn, "SELECT COUNT(DISTINCT word) FROM rollup_word WHERE channel_id = ?",
                  (channel_id,))
