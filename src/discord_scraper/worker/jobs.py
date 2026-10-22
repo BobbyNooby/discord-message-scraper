@@ -182,6 +182,55 @@ def _probe(conn: sqlite3.Connection, cfg: Config) -> str:
     return f"probe: HTTP {status}, token {'alive' if alive else 'not alive'}"
 
 
+# Each copy is the whole database, so only a few are kept.
+BACKUP_KEEP = 2
+BACKUP_PREFIX = "messages-"
+
+
+def backup_keep(conn: sqlite3.Connection) -> int:
+    try:
+        keep = int(str(worker_state(conn, "backup_keep")))
+    except (TypeError, ValueError):
+        return BACKUP_KEEP
+    return keep if keep > 0 else BACKUP_KEEP
+
+
+def _backup(conn: sqlite3.Connection, cfg: Config) -> str:
+    """Copy the live database beside itself, then drop the oldest copies.
+
+    ``Connection.backup`` reads a consistent snapshot while the worker keeps
+    the file open, which a plain file copy of a WAL database does not. The copy
+    is written under a temporary name and renamed, so a crash mid-copy never
+    leaves a half-written file that looks like a backup.
+    """
+    import os
+    from pathlib import Path
+
+    from discord_scraper import locks
+
+    db = locks.database_path(conn)
+    if not db:
+        return "backup: skipped, the database is in memory"
+    folder = Path(db).parent / "backups"
+    folder.mkdir(exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    final = folder / f"{BACKUP_PREFIX}{stamp}.db"
+    partial = folder / f"{final.name}.partial"
+    started = time.monotonic()
+    target = sqlite3.connect(partial)
+    try:
+        conn.backup(target)
+    finally:
+        target.close()
+    os.replace(partial, final)
+    copies = sorted(folder.glob(f"{BACKUP_PREFIX}*.db"))
+    for old in copies[:-backup_keep(conn)]:
+        old.unlink()
+    set_worker_state(conn, "last_backup_at", _now())
+    size_mb = final.stat().st_size / 1024 / 1024
+    return f"backup: {final.name}, {size_mb:.0f} MB in {time.monotonic() - started:.1f}s"
+
+
 def fail_orphaned_jobs(conn: sqlite3.Connection) -> int:
     """Close out jobs a previous worker left ``running`` when it died.
 
@@ -222,6 +271,7 @@ DISPATCH: dict[str, Callable[[sqlite3.Connection, Config], str]] = {
     "backfill": lambda conn, cfg: _ingest(conn, cfg, "backfill"),
     "rebuild_rollups": _rebuild,
     "probe": _probe,
+    "backup": _backup,
 }
 
 

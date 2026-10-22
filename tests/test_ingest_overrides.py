@@ -117,7 +117,7 @@ def test_the_loop_enqueues_the_scheduled_ingest_for_the_override_channel(
 
     loop.run_forever(conn, cfg, iterations=1, sleep=lambda _seconds: None)
 
-    queued = [row[0] for row in conn.execute("SELECT channel_id FROM jobs")]
+    queued = [row[0] for row in conn.execute("SELECT channel_id FROM jobs WHERE kind = 'catch_up'")]
     assert queued == ["c2"]
 
 

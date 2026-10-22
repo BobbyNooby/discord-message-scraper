@@ -15,6 +15,8 @@ from typing import Callable
 from discord_scraper.config import Config
 from discord_scraper.worker.jobs import enqueue, fail_orphaned_jobs, run_pending
 from discord_scraper.worker.scheduler import (
+    BACKUP_EVERY_HOURS,
+    backup_enabled,
     delay_after_failures,
     ingest_paused,
     jitter_seconds,
@@ -59,6 +61,12 @@ def scheduled_ingest_due(conn: sqlite3.Connection) -> bool:
     return _hours_since_either(conn, "last_ingest_at", "last_ingest_attempt_at") * 3600 >= wait
 
 
+def scheduled_backup_due(conn: sqlite3.Connection) -> bool:
+    return (backup_enabled(conn)
+            and _hours_since_either(conn, "last_backup_at", "last_backup_attempt_at")
+            >= BACKUP_EVERY_HOURS)
+
+
 def _queue_scheduled_work(conn: sqlite3.Connection, cfg: Config) -> None:
     from discord_scraper import overrides
 
@@ -71,6 +79,9 @@ def _queue_scheduled_work(conn: sqlite3.Connection, cfg: Config) -> None:
         set_worker_state(conn, "last_ingest_attempt_at", _now())
         set_worker_state(conn, "ingest_jitter_seconds", jitter_seconds(conn))
         enqueue(conn, channel, "catch_up")
+    if scheduled_backup_due(conn):
+        set_worker_state(conn, "last_backup_attempt_at", _now())
+        enqueue(conn, channel, "backup")
 
 
 def _on_start(conn: sqlite3.Connection, cfg: Config) -> None:
