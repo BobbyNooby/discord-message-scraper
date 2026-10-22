@@ -389,3 +389,26 @@ def test_the_failure_counter_survives_a_pass_with_nothing_to_do(two_conns, cfg, 
 
     assert worker_state(other, "consecutive_failures") == "1"
     assert "dead token" in (worker_state(other, "last_error") or "")
+
+
+# --- scheduling after failures ------------------------------------------------
+
+def _failing_feed(monkeypatch, error):
+    from discord_scraper import pipeline
+
+    def fail(*a, **k):
+        raise error
+
+    monkeypatch.setattr(pipeline, "catch_up", fail)
+
+
+def test_a_failed_scheduled_ingest_is_not_retried_on_the_next_pass(two_conns, cfg, monkeypatch):
+    """Before the fix a failure left `last_ingest_at` alone, so every 15 s pass
+    queued the same doomed scrape again."""
+    from discord_scraper.worker import loop
+
+    conn, other = two_conns
+    _failing_feed(monkeypatch, RuntimeError("HTTP 502 Bad Gateway"))
+    loop.run_forever(conn, cfg, iterations=3, sleep=lambda _s: None)
+    kinds = [row[0] for row in other.execute("SELECT kind FROM jobs")]
+    assert kinds == ["catch_up"]
