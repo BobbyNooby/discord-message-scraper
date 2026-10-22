@@ -16,8 +16,14 @@ class AuthError(RuntimeError):
     """Discord refused the token or the channel (HTTP 401/403).
 
     Kept apart from a generic RuntimeError so callers can tell a credential
-    problem — which a re-run cannot fix — from a transient failure.
+    problem — which a re-run cannot fix — from a transient failure. ``status``
+    keeps 401 (dead token) apart from 403 (unreachable channel), because only
+    the first one means "rotate the token".
     """
+
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 def _http_error(code: int, reason: str, what: str) -> str:
@@ -116,7 +122,8 @@ def fetch_messages(token: str, channel_id: str, before: str | None, limit: int =
                 time.sleep(wait)
                 continue
             if e.code in (401, 403):
-                raise AuthError("HTTP 401/403: token invalid or channel not accessible")
+                raise AuthError(_http_error(e.code, str(e.reason), f"channel {channel_id}"),
+                                status=e.code)
             if e.code == 404:
                 raise RuntimeError(f"HTTP 404: channel {channel_id} not found")
             raise RuntimeError(f"HTTP {e.code} {e.reason}: {url}")
