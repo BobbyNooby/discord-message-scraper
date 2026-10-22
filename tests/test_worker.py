@@ -92,6 +92,35 @@ def test_a_dead_token_is_not_resurrected_by_a_later_403(two_conns):
     assert worker_state(other, "token_status") == "dead"
 
 
+def test_the_worker_imports_without_httpx():
+    """The tool declares no dependencies, so the worker must start on a bare Python.
+
+    httpx is installed in the dev environment, which is exactly how a top-level
+    import of it went unnoticed; blocking it in a child interpreter is the check.
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1] / "src"
+    code = (
+        "import sys; sys.modules['httpx'] = None; "
+        f"sys.path.insert(0, {str(src)!r}); "
+        "import discord_scraper.worker.jobs, discord_scraper.worker.loop, discord_scraper.cli"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_probe_without_a_fake_uses_the_stdlib_client(two_conns, monkeypatch):
+    from discord_scraper.worker import probe
+
+    conn, other = two_conns
+    monkeypatch.setattr(probe, "get_current_user", lambda token, timeout: (401, None, "dead"))
+    assert probe.probe_token(conn, "a-token") == (False, 401)
+    assert worker_state(other, "token_status") == "dead"
+
+
 def test_probe_survives_a_network_error(two_conns):
     conn, other = two_conns
 
