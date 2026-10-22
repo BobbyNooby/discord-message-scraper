@@ -289,7 +289,9 @@ def fail_orphaned_jobs(conn: sqlite3.Connection) -> int:
     except sqlite3.OperationalError:
         latest = None   # a database that has never been rebuilt has no run log
     db = locks.database_path(conn)
-    if latest is not None and latest[0] == "started" and db:
+    # Without flock (Windows) the rebuild lock never says "busy", so a CLI
+    # rebuild in progress would be logged as interrupted: leave the log alone.
+    if latest is not None and latest[0] == "started" and db and locks.fcntl is not None:
         try:
             with locks.hold(db, kind="rebuild", holder="worker start"):
                 record_event(conn, source="worker", scope="rebuild", kind="run",
