@@ -54,14 +54,15 @@ def probe_token(
         set_worker_state(conn, "token_last_ok_at", _now())
     elif status == 401:
         set_worker_state(conn, "token_status", "dead")
-    elif status == 403:
-        # The token authenticated; the channel is the problem. Never downgrade a
-        # known-dead token on a 403, and never call a live one dead either.
-        if conn.execute(
-            "SELECT 1 FROM worker_state WHERE key = 'token_status' AND value = 'dead'"
-        ).fetchone() is None:
-            set_worker_state(conn, "token_status", "ok")
     else:
-        set_worker_state(conn, "token_status", "unknown")
+        known_dead = conn.execute(
+            "SELECT 1 FROM worker_state WHERE key = 'token_status' AND value = 'dead'"
+        ).fetchone() is not None
+        # Neither a 403 nor a failed request says anything about a token already
+        # known dead, so it stays dead: downgrading it to "unknown" lifted the
+        # pause and spent a scheduled scrape on a token Discord had refused.
+        if not known_dead:
+            # A 403 means the token authenticated and the channel is the problem.
+            set_worker_state(conn, "token_status", "ok" if status == 403 else "unknown")
     set_worker_state(conn, "token_checked_at", _now())
     return status == 200, status
