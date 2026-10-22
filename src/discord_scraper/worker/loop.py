@@ -94,6 +94,10 @@ def _on_start(conn: sqlite3.Connection, cfg: Config) -> None:
     from discord_scraper import overrides
 
     fail_orphaned_jobs(conn)
+    # Which token the worker started with, for the admin board: in a container
+    # only the worker may hold DISCORD_TOKEN, so the API cannot tell by itself.
+    # Where it came from, never what it is.
+    set_worker_state(conn, "token_source", "environment" if cfg.token else "none")
     # A restart is how a fixed .env or Docker secret is loaded, so ask at once
     # rather than at the next interval. A token saved from /admin still wins
     # over both; forgetting it there is what hands the choice back to them.
