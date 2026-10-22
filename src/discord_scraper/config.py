@@ -213,13 +213,24 @@ def token_file_for(db_path: str | Path) -> Path:
 
 
 def save_token(db_path: str | Path, token: str) -> Path:
-    """Write the token owner-only, atomically, so a reader never sees half of it."""
+    """Write the token atomically, so a reader never sees half of it.
+
+    Owner-only on Linux and macOS. Windows ignores these modes and the file
+    takes the folder's permissions, so there the data folder itself is the
+    boundary. One token per data folder: every database beside it shares it.
+    """
     path = token_file_for(db_path)
     path.parent.mkdir(mode=0o700, exist_ok=True)
+    if os.name != "nt":
+        # `mkdir` leaves an existing folder as it was; tighten one made looser.
+        os.chmod(path.parent, 0o700)
     partial = path.with_name(path.name + ".partial")
     fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
         os.write(fd, token.strip().encode("utf-8"))
+        # On disk before the rename, or a power cut could leave an empty file
+        # that silently falls back to the environment's token.
+        os.fsync(fd)
     finally:
         os.close(fd)
     os.replace(partial, path)
