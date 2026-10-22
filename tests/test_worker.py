@@ -441,6 +441,17 @@ def test_a_401_from_the_feed_marks_the_token_dead_and_pauses_the_schedule(
     assert other.execute("SELECT COUNT(*) FROM jobs WHERE kind = 'catch_up'").fetchone()[0] == 1
 
 
+def test_a_network_error_does_not_bring_a_dead_token_back(two_conns):
+    conn, other = two_conns
+    probe_token(conn, "a-token", get=_responder(401))
+
+    def boom(*a, **k):
+        raise OSError("no route to host")
+
+    probe_token(conn, "a-token", get=boom)
+    assert worker_state(other, "token_status") == "dead"
+
+
 def test_a_403_from_the_feed_leaves_the_token_alone(two_conns, cfg, monkeypatch):
     from discord_scraper.scraper.api import AuthError
     from discord_scraper.worker import loop
