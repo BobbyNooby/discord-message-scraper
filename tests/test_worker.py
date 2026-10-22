@@ -558,6 +558,8 @@ def test_the_worker_waits_when_there_is_no_token(two_conns, cfg):
     set_worker_state(conn, "backup_enabled", "false")
     tokenless = replace(cfg, secrets=replace(cfg.secrets, token=""))
     loop.run_forever(conn, tokenless, iterations=1, sleep=lambda _s: None)
+    # What the board shows as "token in use" when the API itself has none.
+    assert worker_state(other, "token_source") == "none"
     assert other.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
 
 
