@@ -196,11 +196,59 @@ def _load_env_file(env_path: Path) -> dict[str, str]:
     return env
 
 
+def _read_secret_file(path: str | Path) -> str:
+    try:
+        return Path(path).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def token_file_for(db_path: str | Path) -> Path:
+    """Where ``/admin`` saves a token: beside the database, never in the repo.
+
+    ``output/`` is ignored by every checkout and is the data volume in the
+    container, so the file goes wherever the database goes and nowhere else.
+    """
+    return Path(db_path).parent / "secrets" / "discord_token"
+
+
+def save_token(db_path: str | Path, token: str) -> Path:
+    """Write the token owner-only, atomically, so a reader never sees half of it."""
+    path = token_file_for(db_path)
+    path.parent.mkdir(mode=0o700, exist_ok=True)
+    partial = path.with_name(path.name + ".partial")
+    fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, token.strip().encode("utf-8"))
+    finally:
+        os.close(fd)
+    os.replace(partial, path)
+    return path
+
+
+def current_token(cfg: "Config", db_path: str | Path | None = None) -> str:
+    """The token to use right now: a saved one beats the environment.
+
+    Read on every call rather than at startup, so a token rotated from the
+    admin board reaches the next job without restarting the worker.
+    """
+    if db_path:
+        saved = _read_secret_file(token_file_for(db_path))
+        if saved:
+            return saved
+    return cfg.token
+
+
 def _secrets_from(env: dict[str, str], *, require_token: bool = True) -> Secrets:
-    token = env.get("DISCORD_TOKEN")
+    # `DISCORD_TOKEN_FILE` is the Docker/Coolify secrets convention: the value
+    # stays out of the process environment, where child processes inherit it.
+    token = env.get("DISCORD_TOKEN") or (
+        _read_secret_file(env["DISCORD_TOKEN_FILE"]) if env.get("DISCORD_TOKEN_FILE") else ""
+    )
     if not token and require_token:
         raise SystemExit(
-            "Missing DISCORD_TOKEN. Put it in .env or the environment — "
+            "Missing DISCORD_TOKEN. Put it in .env or the environment, point "
+            "DISCORD_TOKEN_FILE at a file holding it, or save one from /admin — "
             "secrets never live in config.toml."
         )
     return Secrets(

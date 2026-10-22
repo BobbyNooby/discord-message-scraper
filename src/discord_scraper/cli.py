@@ -298,10 +298,16 @@ def _serve(args) -> int:
         return 2
     config_path = Path(args.config) if args.config else PROJECT_DIR / "config.toml"
     try:
-        cfg = load_config(config_path=config_path)
+        # A token may arrive later from /admin, so its absence is a wait, not an exit.
+        cfg = load_config(config_path=config_path, require_token=False)
     except SystemExit as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    from discord_scraper.config import current_token
+
+    if not current_token(cfg, database):
+        print("no Discord token yet — save one from /admin (or set DISCORD_TOKEN); "
+              "the worker waits until there is one", file=sys.stderr)
 
     from discord_scraper import locks
     from discord_scraper.db import connect_writable

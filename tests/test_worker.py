@@ -486,6 +486,18 @@ def test_jitter_stays_within_a_tenth_of_the_delay(two_conns):
     assert jitter_seconds(conn, pick=lambda low, high: low) == 0
 
 
+def test_the_worker_waits_when_there_is_no_token(two_conns, cfg):
+    from dataclasses import replace
+
+    from discord_scraper.worker import loop
+
+    conn, other = two_conns
+    set_worker_state(conn, "backup_enabled", "false")
+    tokenless = replace(cfg, secrets=replace(cfg.secrets, token=""))
+    loop.run_forever(conn, tokenless, iterations=1, sleep=lambda _s: None)
+    assert other.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
+
+
 # --- start-up housekeeping ------------------------------------------------------
 
 def test_jobs_left_running_by_a_dead_worker_are_failed_on_start(two_conns, cfg):
@@ -507,6 +519,17 @@ def test_jobs_left_running_by_a_dead_worker_are_failed_on_start(two_conns, cfg):
         "SELECT phase FROM rebuild_events WHERE kind = 'run' ORDER BY id DESC LIMIT 1"
     ).fetchone()
     assert latest["phase"] == "failed"
+
+
+def test_a_dead_token_is_probed_again_when_the_worker_starts(two_conns, cfg, monkeypatch):
+    from discord_scraper.worker import loop
+
+    conn, other = two_conns
+    set_worker_state(conn, "token_status", "dead")
+    set_worker_state(conn, "backup_enabled", "false")
+    monkeypatch.setitem(loop.__dict__, "run_pending", lambda conn, cfg: 0)
+    loop.run_forever(conn, cfg, iterations=1, sleep=lambda _s: None)
+    assert [row[0] for row in other.execute("SELECT kind FROM jobs")] == ["probe"]
 
 
 # --- backups -------------------------------------------------------------------
@@ -549,3 +572,30 @@ def test_a_backup_is_scheduled_daily(two_conns, cfg, monkeypatch):
     set_worker_state(conn, "last_backup_attempt_at", "2000-01-01T00:00:00+00:00")
     loop.run_forever(conn, cfg, iterations=1, sleep=lambda _s: None)
     assert other.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 1
+
+
+# --- the saved token -------------------------------------------------------------
+
+def test_a_saved_token_is_owner_only_and_beats_the_environment(tmp_path, cfg):
+    import os
+    import stat
+
+    from discord_scraper.config import current_token, save_token, token_file_for
+
+    db = tmp_path / "output" / "messages.db"
+    db.parent.mkdir()
+    assert current_token(cfg, db) == cfg.token
+    path = save_token(db, "  saved-token\n")
+    assert path == token_file_for(db)
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    assert stat.S_IMODE(os.stat(path.parent).st_mode) == 0o700
+    assert current_token(cfg, db) == "saved-token"
+
+
+def test_the_token_can_come_from_a_file(tmp_path, monkeypatch):
+    from discord_scraper.config import _secrets_from
+
+    secret = tmp_path / "token"
+    secret.write_text("from-a-file\n")
+    assert _secrets_from({"DISCORD_TOKEN_FILE": str(secret)}).token == "from-a-file"
+    assert _secrets_from({"DISCORD_TOKEN": "env", "DISCORD_TOKEN_FILE": str(secret)}).token == "env"

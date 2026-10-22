@@ -108,6 +108,8 @@ def claim_next(conn: sqlite3.Connection) -> dict[str, Any] | None:
 
 def _ingest(conn: sqlite3.Connection, cfg: Config, kind: str) -> str:
     """Run the existing scrape path unchanged, then queue a rebuild (spec §10.5)."""
+    from dataclasses import replace
+
     from discord_scraper import overrides, pipeline
     from discord_scraper.rollups.build import record_event
 
@@ -115,6 +117,8 @@ def _ingest(conn: sqlite3.Connection, cfg: Config, kind: str) -> str:
     # policy must change what is fetched, not only what the board reads; the
     # whole resolved config is handed down so no later setting drifts again.
     effective = overrides.effective_for(conn, cfg)
+    effective = replace(effective, secrets=replace(effective.secrets,
+                                                   token=token_for(conn, cfg)))
     job = pipeline.catch_up if kind == "catch_up" else pipeline.backfill
     started = time.monotonic()
     record_event(conn, source="worker", scope="ingest", phase="started",
@@ -177,8 +181,16 @@ def _rebuild(conn: sqlite3.Connection, cfg: Config,
     return f"rebuilt {len(counts)} families"
 
 
+def token_for(conn: sqlite3.Connection, cfg: Config) -> str:
+    """The token saved beside this database, else the one from the environment."""
+    from discord_scraper import locks
+    from discord_scraper.config import current_token
+
+    return current_token(cfg, locks.database_path(conn))
+
+
 def _probe(conn: sqlite3.Connection, cfg: Config) -> str:
-    alive, status = probe_token(conn, cfg.token)
+    alive, status = probe_token(conn, token_for(conn, cfg))
     return f"probe: HTTP {status}, token {'alive' if alive else 'not alive'}"
 
 
@@ -295,7 +307,7 @@ def run_job(
         if handler is None:
             raise ValueError(f"unknown job kind: {kind}")
         if kind == "probe" and get is not None:
-            alive, status = probe_token(conn, cfg.token, get=get)
+            alive, status = probe_token(conn, token_for(conn, cfg), get=get)
             result = f"probe: HTTP {status}, token {'alive' if alive else 'not alive'}"
         elif kind == "rebuild_rollups":
             # A rebuild is the only job that runs for a minute, so it is the one
