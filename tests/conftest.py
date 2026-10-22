@@ -22,6 +22,19 @@ from discord_scraper.config import load_config  # noqa: E402  (SRC first, above)
 from discord_scraper.scraper.database import SCHEMA  # noqa: E402  (SRC first, above)
 
 
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    """No test talks to Discord. A test that wants an answer fakes one.
+
+    Without this a probe queued by the worker's start-up sent a real request
+    with the fixture token, and the test passed only because Discord said 401.
+    """
+    def refuse(*_args, **_kwargs):
+        raise OSError("tests never reach the network")
+
+    monkeypatch.setattr("urllib.request.urlopen", refuse)
+
+
 @pytest.fixture
 def mem_db():
     """An in-memory database carrying the real ``messages`` schema.
