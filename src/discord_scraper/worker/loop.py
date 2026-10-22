@@ -14,7 +14,12 @@ from typing import Callable
 
 from discord_scraper.config import Config
 from discord_scraper.worker.jobs import enqueue, run_pending
-from discord_scraper.worker.scheduler import ingest_paused, next_delay_seconds, schedule_enabled
+from discord_scraper.worker.scheduler import (
+    delay_after_failures,
+    ingest_paused,
+    jitter_seconds,
+    schedule_enabled,
+)
 from discord_scraper.worker.state import record_worker_seen, set_worker_state, worker_state
 
 POLL_SECONDS = 15
@@ -34,6 +39,13 @@ def _hours_since(stamp: str | None) -> float:
     return (datetime.now(timezone.utc) - then).total_seconds() / 3600
 
 
+def _int_state(conn: sqlite3.Connection, key: str) -> int:
+    try:
+        return int(str(worker_state(conn, key)))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _hours_since_either(conn: sqlite3.Connection, done_key: str, tried_key: str) -> float:
     # An attempt counts as well as a success. Counting only successes is how a
     # failing ingest was queued again on every 15-second pass.
@@ -42,8 +54,9 @@ def _hours_since_either(conn: sqlite3.Connection, done_key: str, tried_key: str)
 
 
 def scheduled_ingest_due(conn: sqlite3.Connection) -> bool:
-    since = _hours_since_either(conn, "last_ingest_at", "last_ingest_attempt_at")
-    return since * 3600 >= next_delay_seconds(conn)
+    wait = (delay_after_failures(conn, _int_state(conn, "ingest_failures"))
+            + _int_state(conn, "ingest_jitter_seconds"))
+    return _hours_since_either(conn, "last_ingest_at", "last_ingest_attempt_at") * 3600 >= wait
 
 
 def _queue_scheduled_work(conn: sqlite3.Connection, cfg: Config) -> None:
@@ -56,6 +69,7 @@ def _queue_scheduled_work(conn: sqlite3.Connection, cfg: Config) -> None:
     # A token the probe called dead is not retried on a timer: it can only fail.
     if schedule_enabled(conn) and not ingest_paused(conn) and scheduled_ingest_due(conn):
         set_worker_state(conn, "last_ingest_attempt_at", _now())
+        set_worker_state(conn, "ingest_jitter_seconds", jitter_seconds(conn))
         enqueue(conn, channel, "catch_up")
 
 

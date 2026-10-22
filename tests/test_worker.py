@@ -412,6 +412,7 @@ def test_a_failed_scheduled_ingest_is_not_retried_on_the_next_pass(two_conns, cf
     loop.run_forever(conn, cfg, iterations=3, sleep=lambda _s: None)
     kinds = [row[0] for row in other.execute("SELECT kind FROM jobs")]
     assert kinds == ["catch_up"]
+    assert worker_state(other, "ingest_failures") == "1"
 
 
 def test_a_401_from_the_feed_marks_the_token_dead_and_pauses_the_schedule(
@@ -450,7 +451,29 @@ def test_a_successful_ingest_revives_the_token_status(two_conns, cfg, monkeypatc
 
     conn, other = two_conns
     set_worker_state(conn, "token_status", "dead")
+    set_worker_state(conn, "ingest_failures", "3")
     monkeypatch.setattr(pipeline, "catch_up", lambda *a, **k: 4)
     enqueue(conn, "c1", "catch_up")
     run_job(conn, cfg, claim_next(conn))
     assert worker_state(other, "token_status") == "ok"
+    assert worker_state(other, "ingest_failures") == "0"
+
+
+def test_backoff_doubles_after_the_first_failure_and_caps_at_a_day(two_conns):
+    from discord_scraper.worker.scheduler import delay_after_failures
+
+    conn, _other = two_conns
+    hour = 3600
+    assert delay_after_failures(conn, 0) == 6 * hour
+    assert delay_after_failures(conn, 1) == 6 * hour
+    assert delay_after_failures(conn, 2) == 12 * hour
+    assert delay_after_failures(conn, 3) == 24 * hour
+    assert delay_after_failures(conn, 9) == 24 * hour
+
+
+def test_jitter_stays_within_a_tenth_of_the_delay(two_conns):
+    from discord_scraper.worker.scheduler import jitter_seconds
+
+    conn, _other = two_conns
+    assert jitter_seconds(conn, pick=lambda low, high: high) == 6 * 3600 // 10
+    assert jitter_seconds(conn, pick=lambda low, high: low) == 0
