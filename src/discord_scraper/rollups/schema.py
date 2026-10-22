@@ -118,6 +118,11 @@ CREATE TABLE IF NOT EXISTS rollup_word_month (
   PRIMARY KEY (channel_id, word, author_id, month)
 );
 CREATE INDEX IF NOT EXISTS idx_rollup_word_month ON rollup_word_month (channel_id, word);
+-- "Top words in 2023" reads a range of months, not one word: covering, so the
+-- whole answer comes from the index (measured 3-62 ms against 0.6-0.95 s for a
+-- full scan of the reference table).
+CREATE INDEX IF NOT EXISTS idx_rollup_word_month_period
+    ON rollup_word_month (channel_id, month, word, author_id, uses);
 
 CREATE TABLE IF NOT EXISTS rollup_link (
   channel_id TEXT NOT NULL,
