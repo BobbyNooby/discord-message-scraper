@@ -412,3 +412,45 @@ def test_a_failed_scheduled_ingest_is_not_retried_on_the_next_pass(two_conns, cf
     loop.run_forever(conn, cfg, iterations=3, sleep=lambda _s: None)
     kinds = [row[0] for row in other.execute("SELECT kind FROM jobs")]
     assert kinds == ["catch_up"]
+
+
+def test_a_401_from_the_feed_marks_the_token_dead_and_pauses_the_schedule(
+    two_conns, cfg, monkeypatch
+):
+    from discord_scraper.scraper.api import AuthError
+    from discord_scraper.worker import loop
+    from discord_scraper.worker.scheduler import ingest_paused
+    from discord_scraper.worker.state import banner_for
+
+    conn, other = two_conns
+    _failing_feed(monkeypatch, AuthError("HTTP 401: token is invalid or revoked", status=401))
+    loop.run_forever(conn, cfg, iterations=1, sleep=lambda _s: None)
+    assert worker_state(other, "token_status") == "dead"
+    assert banner_for(dict(other.execute("SELECT key, value FROM worker_state"))) == "token_dead"
+    # Even long past the delay, a dead token is not retried on a timer.
+    set_worker_state(conn, "last_ingest_attempt_at", "2000-01-01T00:00:00+00:00")
+    loop.run_forever(conn, cfg, iterations=1, sleep=lambda _s: None)
+    assert ingest_paused(other)
+    assert other.execute("SELECT COUNT(*) FROM jobs WHERE kind = 'catch_up'").fetchone()[0] == 1
+
+
+def test_a_403_from_the_feed_leaves_the_token_alone(two_conns, cfg, monkeypatch):
+    from discord_scraper.scraper.api import AuthError
+    from discord_scraper.worker import loop
+
+    conn, other = two_conns
+    set_worker_state(conn, "token_status", "ok")
+    _failing_feed(monkeypatch, AuthError("HTTP 403: no permission", status=403))
+    loop.run_forever(conn, cfg, iterations=1, sleep=lambda _s: None)
+    assert worker_state(other, "token_status") == "ok"
+
+
+def test_a_successful_ingest_revives_the_token_status(two_conns, cfg, monkeypatch):
+    from discord_scraper import pipeline
+
+    conn, other = two_conns
+    set_worker_state(conn, "token_status", "dead")
+    monkeypatch.setattr(pipeline, "catch_up", lambda *a, **k: 4)
+    enqueue(conn, "c1", "catch_up")
+    run_job(conn, cfg, claim_next(conn))
+    assert worker_state(other, "token_status") == "ok"

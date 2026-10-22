@@ -15,6 +15,7 @@ from typing import Any, Callable
 
 from discord_scraper.config import Config
 from discord_scraper.rollups.build import rebuild_all
+from discord_scraper.scraper.api import AuthError
 from discord_scraper.worker.probe import probe_token
 from discord_scraper.worker.state import record_worker_seen, set_worker_state, worker_state
 
@@ -121,13 +122,22 @@ def _ingest(conn: sqlite3.Connection, cfg: Config, kind: str) -> str:
     try:
         added = job(conn, effective, pipeline.Budget(None), started)
     except Exception as exc:
+        if isinstance(exc, AuthError) and exc.status == 401:
+            # The feed itself just proved the token dead; waiting for the next
+            # probe left the public banner green for days.
+            set_worker_state(conn, "token_status", "dead")
+            set_worker_state(conn, "token_checked_at", _now())
         record_event(conn, source="worker", scope="ingest", level="error", phase="failed",
                      message=f"{kind} failed: {type(exc).__name__}: {exc}",
                      seconds=round(time.monotonic() - started, 3))
         raise
     seconds = round(time.monotonic() - started, 3)
-    set_worker_state(conn, "last_ingest_at", _now())
+    now = _now()
+    set_worker_state(conn, "last_ingest_at", now)
     set_worker_state(conn, "last_ingest_added", added)
+    # A fetch that worked is as good as a probe.
+    set_worker_state(conn, "token_status", "ok")
+    set_worker_state(conn, "token_last_ok_at", now)
     enqueue(conn, effective.channel_id, "rebuild_rollups")
     # Counts and a duration, never a message: the same privacy line as the rest
     # of the dashboard.

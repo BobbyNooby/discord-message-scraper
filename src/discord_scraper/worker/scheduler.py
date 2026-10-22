@@ -42,3 +42,12 @@ def next_delay_seconds(conn: sqlite3.Connection) -> int:
 
 def should_run(conn: sqlite3.Connection, seconds_since_last: float) -> bool:
     return schedule_enabled(conn) and seconds_since_last >= next_delay_seconds(conn)
+
+
+def ingest_paused(conn: sqlite3.Connection) -> bool:
+    """A token the probe called dead is not retried on a timer.
+
+    The schedule resumes on its own once a probe or a manual ingest proves the
+    token works again; until then a retry can only fail the same way.
+    """
+    return str(worker_state(conn, "token_status") or "").lower() == "dead"
