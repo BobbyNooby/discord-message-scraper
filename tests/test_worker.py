@@ -477,3 +477,25 @@ def test_jitter_stays_within_a_tenth_of_the_delay(two_conns):
     conn, _other = two_conns
     assert jitter_seconds(conn, pick=lambda low, high: high) == 6 * 3600 // 10
     assert jitter_seconds(conn, pick=lambda low, high: low) == 0
+
+
+# --- start-up housekeeping ------------------------------------------------------
+
+def test_jobs_left_running_by_a_dead_worker_are_failed_on_start(two_conns, cfg):
+    from discord_scraper.rollups.build import record_event
+    from discord_scraper.worker import loop
+
+    conn, other = two_conns
+    set_worker_state(conn, "cron_enabled", "false")
+    enqueue(conn, "c1", "rebuild_rollups")
+    claim_next(conn)                                  # ...and then the worker died
+    record_event(conn, source="worker", scope="rebuild", kind="run", phase="started",
+                 message="rebuild started")
+    loop.run_forever(conn, cfg, iterations=1, sleep=lambda _s: None)
+    row = other.execute("SELECT status, error FROM jobs").fetchone()
+    assert row["status"] == "failed"
+    assert "stopped" in row["error"]
+    latest = other.execute(
+        "SELECT phase FROM rebuild_events WHERE kind = 'run' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert latest["phase"] == "failed"
