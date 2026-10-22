@@ -55,8 +55,8 @@ def _hours_since_either(conn: sqlite3.Connection, done_key: str, tried_key: str)
                _hours_since(worker_state(conn, tried_key)))
 
 
-def scheduled_ingest_due(conn: sqlite3.Connection) -> bool:
-    wait = (delay_after_failures(conn, _int_state(conn, "ingest_failures"))
+def scheduled_ingest_due(conn: sqlite3.Connection, cfg: Config | None = None) -> bool:
+    wait = (delay_after_failures(conn, _int_state(conn, "ingest_failures"), cfg)
             + _int_state(conn, "ingest_jitter_seconds"))
     return _hours_since_either(conn, "last_ingest_at", "last_ingest_attempt_at") * 3600 >= wait
 
@@ -72,14 +72,15 @@ def _queue_scheduled_work(conn: sqlite3.Connection, cfg: Config) -> None:
 
     # The channel the job is queued for must be the effective one: a scheduled
     # ingest that names the file's channel would scrape it no matter what the
-    # admin saved.
-    channel = overrides.effective_for(conn, cfg).channel_id
+    # admin saved. The schedule falls back to the same resolved config.
+    effective = overrides.effective_for(conn, cfg)
+    channel = effective.channel_id
     # No token yet (one can be saved from /admin later), or one the probe
     # called dead: either way a timed retry can only fail.
-    if (schedule_enabled(conn) and not ingest_paused(conn) and token_for(conn, cfg)
-            and scheduled_ingest_due(conn)):
+    if (schedule_enabled(conn, effective) and not ingest_paused(conn)
+            and token_for(conn, cfg) and scheduled_ingest_due(conn, effective)):
         set_worker_state(conn, "last_ingest_attempt_at", _now())
-        set_worker_state(conn, "ingest_jitter_seconds", jitter_seconds(conn))
+        set_worker_state(conn, "ingest_jitter_seconds", jitter_seconds(conn, cfg=effective))
         enqueue(conn, channel, "catch_up")
     if scheduled_backup_due(conn):
         set_worker_state(conn, "last_backup_attempt_at", _now())

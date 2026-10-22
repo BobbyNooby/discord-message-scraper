@@ -11,6 +11,7 @@ from __future__ import annotations
 import random
 import sqlite3
 
+from discord_scraper.config import Config
 from discord_scraper.worker.state import worker_state
 
 DEFAULT_HOURS = 6
@@ -26,57 +27,65 @@ JITTER_FRACTION = 0.1
 BACKUP_EVERY_HOURS = 24
 
 
-def _switch(conn: sqlite3.Connection, key: str) -> bool:
-    """On unless the stored value says off."""
+def _switch(conn: sqlite3.Connection, key: str, default: bool = True) -> bool:
+    """The stored value when there is one, otherwise ``default``."""
     stored = worker_state(conn, key)
     if stored is None:
-        return True
+        return default
     return str(stored).strip().lower() not in {"0", "false", "no", "off"}
 
 
-def schedule_enabled(conn: sqlite3.Connection) -> bool:
-    return _switch(conn, "cron_enabled")
+# `cfg` is the resolved config (file plus overrides). A value saved from the
+# admin board lands in `worker_state` and wins; without one, `[worker]` in
+# config.toml decides. Reading only `worker_state` ignored the file entirely,
+# so `cron_enabled = false` there did not stop the schedule.
+
+def schedule_enabled(conn: sqlite3.Connection, cfg: Config | None = None) -> bool:
+    return _switch(conn, "cron_enabled", cfg.cron_enabled if cfg is not None else True)
 
 
 def backup_enabled(conn: sqlite3.Connection) -> bool:
     return _switch(conn, "backup_enabled")
 
 
-def cron_hours(conn: sqlite3.Connection) -> int:
+def cron_hours(conn: sqlite3.Connection, cfg: Config | None = None) -> int:
+    fallback = cfg.cron_hours if cfg is not None else DEFAULT_HOURS
     stored = worker_state(conn, "cron_hours")
     try:
         hours = int(str(stored))
     except (TypeError, ValueError):
-        return DEFAULT_HOURS
-    return hours if hours > 0 else DEFAULT_HOURS
+        return fallback
+    return hours if hours > 0 else fallback
 
 
-def next_delay_seconds(conn: sqlite3.Connection) -> int:
+def next_delay_seconds(conn: sqlite3.Connection, cfg: Config | None = None) -> int:
     """Seconds until the next scheduled ingest.
 
     Never zero: a delay of zero is a busy loop wearing a schedule's clothes.
     """
-    return max(MINIMUM_SECONDS, cron_hours(conn) * 3600)
+    return max(MINIMUM_SECONDS, cron_hours(conn, cfg) * 3600)
 
 
 def should_run(conn: sqlite3.Connection, seconds_since_last: float) -> bool:
     return schedule_enabled(conn) and seconds_since_last >= next_delay_seconds(conn)
 
 
-def delay_after_failures(conn: sqlite3.Connection, failures: int) -> int:
+def delay_after_failures(conn: sqlite3.Connection, failures: int,
+                         cfg: Config | None = None) -> int:
     """The scheduled delay, doubled for each consecutive failure after the first.
 
     One failure is usually the network, so it waits the normal delay; a run of
     them is usually the token, and waits longer each time.
     """
-    base = next_delay_seconds(conn)
+    base = next_delay_seconds(conn, cfg)
     if failures <= 1:
         return base
     return min(base * 2 ** (failures - 1), max(base, MAX_BACKOFF_SECONDS))
 
 
-def jitter_seconds(conn: sqlite3.Connection, pick=random.randint) -> int:
-    return pick(0, int(next_delay_seconds(conn) * JITTER_FRACTION))
+def jitter_seconds(conn: sqlite3.Connection, pick=random.randint, *,
+                   cfg: Config | None = None) -> int:
+    return pick(0, int(next_delay_seconds(conn, cfg) * JITTER_FRACTION))
 
 
 def ingest_paused(conn: sqlite3.Connection) -> bool:

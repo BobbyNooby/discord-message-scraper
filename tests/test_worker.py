@@ -304,6 +304,35 @@ def test_next_delay_uses_cron_hours(two_conns):
     assert next_delay_seconds(conn) == 3600
 
 
+def _with_worker(cfg, **values):
+    from dataclasses import replace
+
+    return replace(cfg, settings=replace(cfg.settings, **values))
+
+
+def test_config_toml_turns_the_schedule_off_when_the_board_never_did(two_conns, cfg, monkeypatch):
+    """`[worker] cron_enabled = false` used to be read and then ignored."""
+    from discord_scraper.worker import loop
+
+    conn, other = two_conns
+    set_worker_state(conn, "backup_enabled", "false")
+    monkeypatch.setitem(loop.__dict__, "run_pending", lambda conn, cfg: 0)
+    loop.run_forever(conn, _with_worker(cfg, cron_enabled=False), iterations=1,
+                     sleep=lambda _s: None)
+    assert other.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
+
+
+def test_a_schedule_saved_from_the_board_beats_config_toml(two_conns, cfg):
+    conn, _other = two_conns
+    off = _with_worker(cfg, cron_enabled=False, cron_hours=12)
+    assert schedule_enabled(conn, off) is False
+    assert next_delay_seconds(conn, off) == 12 * 3600
+    set_worker_state(conn, "cron_enabled", "true")
+    set_worker_state(conn, "cron_hours", "2")
+    assert schedule_enabled(conn, off) is True
+    assert next_delay_seconds(conn, off) == 2 * 3600
+
+
 def test_a_short_delay_is_never_zero(two_conns):
     conn, _other = two_conns
     set_worker_state(conn, "cron_hours", "0")
@@ -359,7 +388,7 @@ def test_the_loop_survives_a_failing_job(two_conns, cfg, monkeypatch):
         raise RuntimeError("HTTP 401/403: token invalid or channel not accessible")
 
     monkeypatch.setitem(jobs_module.DISPATCH, "catch_up", boom)
-    monkeypatch.setattr(loop, "schedule_enabled", lambda conn: False)
+    monkeypatch.setattr(loop, "schedule_enabled", lambda conn, cfg=None: False)
 
     conn, other = two_conns
     set_worker_state(conn, "backup_enabled", "false")
@@ -384,7 +413,7 @@ def test_the_failure_counter_survives_a_pass_with_nothing_to_do(two_conns, cfg, 
         raise RuntimeError("still the same dead token")
 
     monkeypatch.setitem(jobs_module.DISPATCH, "catch_up", boom)
-    monkeypatch.setattr(loop, "schedule_enabled", lambda conn: False)
+    monkeypatch.setattr(loop, "schedule_enabled", lambda conn, cfg=None: False)
 
     conn, other = two_conns
     set_worker_state(conn, "backup_enabled", "false")
