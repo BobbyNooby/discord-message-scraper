@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+import urllib.error
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -106,6 +107,18 @@ def claim_next(conn: sqlite3.Connection) -> dict[str, Any] | None:
     return None if found is None else dict(zip(JOB_FIELDS, found))
 
 
+def _unreachable(exc: BaseException) -> bool:
+    """True when Discord was never reached: no network, no DNS, no answer in time.
+
+    Anything Discord did answer — an HTTP error, a refusal — is a real failure
+    and still counts toward the back-off. `HTTPError` is a `URLError`, so it is
+    ruled out first.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        return False
+    return isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError))
+
+
 def _ingest(conn: sqlite3.Connection, cfg: Config, kind: str) -> str:
     """Run the existing scrape path unchanged, then queue a rebuild (spec §10.5)."""
     from dataclasses import replace
@@ -127,9 +140,13 @@ def _ingest(conn: sqlite3.Connection, cfg: Config, kind: str) -> str:
         added = job(conn, effective, pipeline.Budget(None), started)
     except Exception as exc:
         # Counted apart from `consecutive_failures`, which any job that runs
-        # resets: a rebuild that works says nothing about the next scrape.
-        failures = int(worker_state(conn, "ingest_failures") or 0) + 1
-        set_worker_state(conn, "ingest_failures", failures)
+        # resets: a rebuild that works says nothing about the next scrape. A
+        # failure that never reached Discord is not counted at all: a laptop
+        # asleep overnight is not a sign of trouble, and doubling the wait
+        # for it left the stats a day behind.
+        if not _unreachable(exc):
+            failures = int(worker_state(conn, "ingest_failures") or 0) + 1
+            set_worker_state(conn, "ingest_failures", failures)
         if isinstance(exc, AuthError) and exc.status == 401:
             # The feed itself just proved the token dead; waiting for the next
             # probe left the public banner green for days.

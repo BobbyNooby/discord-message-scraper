@@ -449,6 +449,41 @@ def test_a_failed_scheduled_ingest_is_not_retried_on_the_next_pass(two_conns, cf
     assert worker_state(other, "ingest_failures") == "1"
 
 
+@pytest.mark.parametrize("error", [
+    pytest.param(__import__("urllib.error").error.URLError("[Errno 8] nodename nor servname"), id="no-dns"),
+    pytest.param(TimeoutError("The read operation timed out"), id="timeout"),
+    pytest.param(ConnectionResetError("connection reset by peer"), id="reset"),
+])
+def test_a_scrape_that_never_reached_discord_does_not_stretch_the_schedule(
+    two_conns, cfg, monkeypatch, error
+):
+    """A Mac asleep overnight failed twice and pushed the next scrape 12 h out."""
+    from discord_scraper.worker import loop
+    from discord_scraper.worker.scheduler import delay_after_failures
+
+    conn, other = two_conns
+    set_worker_state(conn, "backup_enabled", "false")
+    _failing_feed(monkeypatch, error)
+    for _ in range(3):
+        set_worker_state(conn, "last_ingest_attempt_at", "2000-01-01T00:00:00+00:00")
+        loop.run_forever(conn, cfg, iterations=1, sleep=lambda _s: None)
+    assert other.execute("SELECT COUNT(*) FROM jobs WHERE status = 'failed'").fetchone()[0] == 3
+    assert (worker_state(other, "ingest_failures") or "0") == "0"
+    assert delay_after_failures(other, int(worker_state(other, "ingest_failures") or 0)) == 6 * 3600
+
+
+def test_an_http_error_from_discord_still_counts_toward_the_back_off(two_conns, cfg, monkeypatch):
+    import urllib.error
+
+    from discord_scraper.worker import loop
+
+    conn, other = two_conns
+    set_worker_state(conn, "backup_enabled", "false")
+    _failing_feed(monkeypatch, urllib.error.HTTPError("https://discord.com/api", 503, "Unavailable", {}, None))
+    loop.run_forever(conn, cfg, iterations=1, sleep=lambda _s: None)
+    assert worker_state(other, "ingest_failures") == "1"
+
+
 def test_a_401_from_the_feed_marks_the_token_dead_and_pauses_the_schedule(
     two_conns, cfg, monkeypatch
 ):
