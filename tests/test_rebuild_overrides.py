@@ -69,3 +69,22 @@ def test_the_cli_rebuild_can_ignore_overrides(seeded_db_path, tmp_path):
     assert main(["rollups", "rebuild", "--db", str(seeded_db_path),
                  "--config", str(tmp_path / "config.toml"), "--ignore-overrides"]) == 0
     assert _zones_on_disk(seeded_db_path) == {"UTC"}
+
+
+def test_status_compares_against_the_settings_the_rebuild_used(seeded_db_path, tmp_path, capsys):
+    """A zone saved on the board made every family read stale straight after a
+    rebuild, because status fingerprinted the file alone."""
+    from discord_scraper.cli import main
+    from discord_scraper.rollups.schema import FAMILIES
+
+    cfg_fixture(tmp_path, timezone="UTC")
+    conn = _control_tables(sqlite3.connect(seeded_db_path))
+    _set_override(conn, "timezone", "Europe/London")
+    conn.close()
+    config_arg = ["--config", str(tmp_path / "config.toml")]
+
+    assert main(["rollups", "rebuild", "--db", str(seeded_db_path), *config_arg]) == 0
+    capsys.readouterr()
+    assert main(["rollups", "status", "--db", str(seeded_db_path), *config_arg]) == 0
+    out = capsys.readouterr().out
+    assert out.count("current") == len(FAMILIES), out

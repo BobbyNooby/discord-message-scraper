@@ -197,14 +197,18 @@ def _digest_for(config_path: str | None, conn) -> str | None:
     """
     from pathlib import Path
 
+    from discord_scraper import overrides
     from discord_scraper.config import PROJECT_DIR, config_from_settings, load_settings
     from discord_scraper.rollups.build import config_digest
 
     path = Path(config_path) if config_path else PROJECT_DIR / "config.toml"
     try:
-        return config_digest(config_from_settings(load_settings(config_path=path)), conn)
+        cfg = config_from_settings(load_settings(config_path=path))
     except SystemExit:
         return None
+    # A rebuild applies the board's saved settings, so its recorded fingerprint
+    # is of those. Against the file alone, any saved zone read as stale.
+    return config_digest(overrides.effective_for(conn, cfg), conn)
 
 
 def _rollups_rebuild(args) -> int:
