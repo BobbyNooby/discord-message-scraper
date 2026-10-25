@@ -1,7 +1,7 @@
 import pytest
 
 from discord_scraper.text import clean, emoji, links, load_stopwords, tokens
-from tests.conftest import cfg_fixture
+from discord_scraper.testing import cfg_fixture
 
 
 @pytest.mark.parametrize("raw,expected", [

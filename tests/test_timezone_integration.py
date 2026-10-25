@@ -6,7 +6,7 @@ path uses it, including the day grain in `rollup_activity` and the hour in
 """
 
 from discord_scraper.rollups.build import rebuild_all
-from tests.conftest import author_raw, cfg_fixture, seed_messages
+from discord_scraper.testing import author_raw, cfg_fixture, seed_messages
 
 
 def _seed_a_late_message(conn):

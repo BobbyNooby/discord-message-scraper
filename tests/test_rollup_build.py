@@ -2,7 +2,7 @@ import pytest
 
 from discord_scraper.rollups.build import rebuild_all
 from discord_scraper.rollups.schema import FAMILIES, is_stale, provenance
-from tests.conftest import author_raw, seed_messages
+from discord_scraper.testing import author_raw, seed_messages
 
 
 def rows(conn, sql, *params):

@@ -12,7 +12,7 @@ import urllib.error
 
 import pytest
 
-from tests.conftest import cfg_fixture
+from discord_scraper.testing import cfg_fixture
 
 
 def _scrape(tmp_path, monkeypatch, db_path, fetch):

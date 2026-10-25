@@ -4,7 +4,7 @@ import pytest
 
 from discord_scraper.cli import main
 from discord_scraper.rollups.schema import FAMILIES
-from tests.conftest import cfg_fixture
+from discord_scraper.testing import cfg_fixture
 
 
 def test_status_reports_every_family(seeded_db_path, capsys):

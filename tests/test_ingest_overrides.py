@@ -10,7 +10,7 @@ import sqlite3
 
 from discord_scraper.rollups.schema import create_control_tables, create_rollup_tables
 from discord_scraper.worker.jobs import claim_next, enqueue, run_job
-from tests.conftest import cfg_fixture
+from discord_scraper.testing import cfg_fixture
 
 
 def _control_tables(path):

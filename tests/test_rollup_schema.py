@@ -221,7 +221,7 @@ def test_a_rebuild_refreshes_an_outdated_stamp(seeded_db_path, tmp_path):
     from discord_scraper.rollups.build import rebuild_all
     from discord_scraper.rollups.schema import SCHEMA_VERSION, schema_version
     from discord_scraper.scraper.database import set_meta
-    from tests.conftest import cfg_fixture
+    from discord_scraper.testing import cfg_fixture
 
     conn = sqlite3.connect(seeded_db_path)
     conn.row_factory = sqlite3.Row

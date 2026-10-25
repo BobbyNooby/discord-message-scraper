@@ -7,7 +7,7 @@ def test_media_is_keyed_on_the_url_and_survives_mixed_providers(conn, cfg):
     reference database, so the URL is the identity and the first sighting that
     carried a title or thumbnail fills the gaps.
     """
-    from tests.conftest import author_raw, seed_messages
+    from discord_scraper.testing import author_raw, seed_messages
     from discord_scraper.rollups.build import rebuild_media
 
     def embed(url, provider, thumbnail):
@@ -42,7 +42,7 @@ def _gif(url):
 
 
 def test_media_posts_say_who_posted_it_when_and_which_post_was_first(conn, cfg):
-    from tests.conftest import author_raw, seed_messages
+    from discord_scraper.testing import author_raw, seed_messages
     from discord_scraper.rollups import query
     from discord_scraper.rollups.build import rebuild_media
     from discord_scraper.rollups.identity import resolve_identities
@@ -75,7 +75,7 @@ def test_media_posts_are_none_before_a_rebuild_writes_them(conn):
 
 
 def test_the_word_timeline_splits_uses_by_local_month(conn, tmp_path):
-    from tests.conftest import author_raw, cfg_fixture, seed_messages
+    from discord_scraper.testing import author_raw, cfg_fixture, seed_messages
     from discord_scraper.rollups import query
     from discord_scraper.rollups.build import rebuild_word
     from discord_scraper.rollups.identity import resolve_identities
@@ -98,7 +98,7 @@ def test_the_word_timeline_splits_uses_by_local_month(conn, tmp_path):
 
 
 def test_word_uses_between_months_honour_the_range_and_the_years(conn, cfg):
-    from tests.conftest import author_raw, seed_messages
+    from discord_scraper.testing import author_raw, seed_messages
     from discord_scraper.rollups import query
     from discord_scraper.rollups.build import rebuild_word
     from discord_scraper.rollups.identity import resolve_identities
@@ -150,7 +150,7 @@ def test_the_period_query_is_served_from_the_month_index_even_for_years_alone(co
 
 
 def test_word_suggestions_rank_indexed_words_by_use(conn, cfg):
-    from tests.conftest import author_raw, seed_messages
+    from discord_scraper.testing import author_raw, seed_messages
     from discord_scraper.rollups import query
     from discord_scraper.rollups.build import rebuild_word
     from discord_scraper.rollups.identity import resolve_identities

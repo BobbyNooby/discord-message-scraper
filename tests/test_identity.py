@@ -1,5 +1,5 @@
 from discord_scraper.rollups.identity import Identities, latest_display_names, resolve_identities
-from tests.conftest import cfg_fixture, seed_messages
+from discord_scraper.testing import cfg_fixture, seed_messages
 
 
 def test_display_name_falls_back_when_global_name_is_absent(seeded_db):
