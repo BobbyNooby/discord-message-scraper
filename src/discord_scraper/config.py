@@ -78,99 +78,39 @@ class Settings:
     redirect_uri: str = ""
 
 
+def _passthrough(part: str, name: str) -> property:
+    """A read-only ``Config`` attribute that answers from ``secrets`` or ``settings``."""
+    return property(lambda self: getattr(getattr(self, part), name))
+
+
 @dataclass(frozen=True)
 class Config:
     secrets: Secrets
     settings: Settings
 
     # Convenience passthroughs: callers read ``cfg.token``, not the nesting.
-    @property
-    def token(self) -> str:
-        return self.secrets.token
-
-    @property
-    def client_secret(self) -> str | None:
-        return self.secrets.client_secret
-
-    @property
-    def session_secret(self) -> str | None:
-        return self.secrets.session_secret
-
-    @property
-    def admin_id(self) -> str | None:
-        return self.secrets.admin_id
-
-    @property
-    def channel_id(self) -> str:
-        return self.settings.channel_id
-
-    @property
-    def app_name(self) -> str:
-        return self.settings.app_name
-
-    @property
-    def timezone(self) -> str:
-        return self.settings.timezone
-
-    @property
-    def count_types(self) -> tuple[int, ...]:
-        return self.settings.count_types
-
-    @property
-    def exclude_bots(self) -> bool:
-        return self.settings.exclude_bots
-
-    @property
-    def batch_size(self) -> int:
-        return self.settings.batch_size
-
-    @property
-    def stopword_packs(self) -> list[str]:
-        return self.settings.stopword_packs
-
-    @property
-    def stopword_dir(self) -> Path:
-        return self.settings.stopword_dir
-
-    @property
-    def ignore_words(self) -> list[str]:
-        return self.settings.ignore_words
-
-    @property
-    def identities(self) -> dict[str, list[str]]:
-        return self.settings.identities
-
-    @property
-    def cron_enabled(self) -> bool:
-        return self.settings.cron_enabled
-
-    @property
-    def cron_hours(self) -> int:
-        return self.settings.cron_hours
-
-    @property
-    def week_start(self) -> str:
-        return self.settings.week_start
-
-    @property
-    def time_format(self) -> str:
-        return self.settings.time_format
-
-    @property
-    def media_top_n(self) -> int:
-        return self.settings.media_top_n
-
-    @property
-    def media_thumbnails(self) -> str:
-        return self.settings.media_thumbnails
-
-    @property
-    def show_recent(self) -> int:
-        return self.settings.show_recent
-
-    @property
-    def allowlist(self) -> str:
-        return self.settings.allowlist
+    token = _passthrough("secrets", "token")
+    client_secret = _passthrough("secrets", "client_secret")
+    session_secret = _passthrough("secrets", "session_secret")
+    admin_id = _passthrough("secrets", "admin_id")
+    channel_id = _passthrough("settings", "channel_id")
+    app_name = _passthrough("settings", "app_name")
+    timezone = _passthrough("settings", "timezone")
+    count_types = _passthrough("settings", "count_types")
+    exclude_bots = _passthrough("settings", "exclude_bots")
+    batch_size = _passthrough("settings", "batch_size")
+    stopword_packs = _passthrough("settings", "stopword_packs")
+    stopword_dir = _passthrough("settings", "stopword_dir")
+    ignore_words = _passthrough("settings", "ignore_words")
+    identities = _passthrough("settings", "identities")
+    cron_enabled = _passthrough("settings", "cron_enabled")
+    cron_hours = _passthrough("settings", "cron_hours")
+    week_start = _passthrough("settings", "week_start")
+    time_format = _passthrough("settings", "time_format")
+    media_top_n = _passthrough("settings", "media_top_n")
+    media_thumbnails = _passthrough("settings", "media_thumbnails")
+    show_recent = _passthrough("settings", "show_recent")
+    allowlist = _passthrough("settings", "allowlist")
 
     @property
     def client_id(self) -> str:
