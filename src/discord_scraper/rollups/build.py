@@ -497,32 +497,67 @@ def write_stats(conn: sqlite3.Connection, channel_id: str, derived: Derived) -> 
 # channel is scanned once, and a caller that wants a single family gets a scan
 # of its own without a second code path.
 
-def rebuild_type(conn: sqlite3.Connection, cfg: Config, ids: Identities, derived=None) -> int:
-    d = derived or derive(conn, cfg, ids)
-    return _write(conn, cfg.channel_id, "type", "channel_id, type, msgs",
-                  [(cfg.channel_id, int(k), n) for k, n in d.types.items()])
+# The families that are one row shape over one derived map: the columns each
+# writes and how its rows come out of a derive. Word, link and media do more
+# than that, so they keep functions of their own below.
+_ROWS: dict[str, tuple[str, Callable[[Derived, str], list[tuple]]]] = {
+    "type": ("channel_id, type, msgs",
+             lambda d, c: [(c, int(k), n) for k, n in d.types.items()]),
+    "activity": ("channel_id, day, author_id, msgs, chars, media, edits, replies",
+                 lambda d, c: [(c, day, author, *counts)
+                               for (day, author), counts in d.activity.items()]),
+    "heat": ("channel_id, year, dow, hour, author_id, msgs",
+             lambda d, c: [(c, year, dow, hour, author, n)
+                           for (year, dow, hour, author), n in d.heat.items()]),
+    "reply": ("channel_id, parent_author_id, child_author_id, msgs",
+              lambda d, c: [(c, parent, child, n) for (parent, child), n in d.replies.items()]),
+    "provider": ("channel_id, author_id, provider, embeds",
+                 lambda d, c: [(c, author, provider, n)
+                               for (author, provider), n in d.providers.items()]),
+    "embed_type": ("channel_id, embed_type, embeds",
+                   lambda d, c: [(c, kind, n) for kind, n in d.embed_types.items()]),
+    "emoji": ("channel_id, emoji, author_id, uses",
+              lambda d, c: [(c, symbol, author, n) for (symbol, author), n in d.emoji.items()]),
+    "reaction": ("channel_id, emoji, author_id, count",
+                 lambda d, c: [(c, name, author, n) for (name, author), n in d.reactions.items()]),
+    "attachment": ("channel_id, mime, author_id, count",
+                   lambda d, c: [(c, mime, author, n)
+                                 for (mime, author), n in d.attachments.items()]),
+    "response": ("channel_id, author_id, replies, total_seconds, capped_replies",
+                 lambda d, c: [(c, author, r, s, capped)
+                               for author, (r, s, capped) in d.response.items()]),
+    "starter": ("channel_id, author_id, starters",
+                lambda d, c: [(c, author, n) for author, n in d.starters.items()]),
+    "edit_speed": ("channel_id, author_id, edits, total_seconds, capped_edits",
+                   lambda d, c: [(c, author, e, s, capped)
+                                 for author, (e, s, capped) in d.edit_speed.items()]),
+}
 
 
-def rebuild_activity(conn: sqlite3.Connection, cfg: Config, ids: Identities, derived=None) -> int:
-    d = derived or derive(conn, cfg, ids)
-    return _write(conn, cfg.channel_id, "activity",
-                  "channel_id, day, author_id, msgs, chars, media, edits, replies",
-                  [(cfg.channel_id, day, author, *counts)
-                   for (day, author), counts in d.activity.items()])
+def _rebuilder(family: str) -> Callable[..., int]:
+    columns, rows = _ROWS[family]
+
+    def rebuild(conn: sqlite3.Connection, cfg: Config, ids: Identities, derived=None) -> int:
+        d = derived or derive(conn, cfg, ids)
+        return _write(conn, cfg.channel_id, family, columns, rows(d, cfg.channel_id))
+
+    rebuild.__name__ = rebuild.__qualname__ = f"rebuild_{family}"
+    return rebuild
 
 
-def rebuild_heat(conn: sqlite3.Connection, cfg: Config, ids: Identities, derived=None) -> int:
-    d = derived or derive(conn, cfg, ids)
-    return _write(conn, cfg.channel_id, "heat", "channel_id, year, dow, hour, author_id, msgs",
-                  [(cfg.channel_id, year, dow, hour, author, n)
-                   for (year, dow, hour, author), n in d.heat.items()])
-
-
-def rebuild_reply(conn: sqlite3.Connection, cfg: Config, ids: Identities, derived=None) -> int:
-    d = derived or derive(conn, cfg, ids)
-    return _write(conn, cfg.channel_id, "reply",
-                  "channel_id, parent_author_id, child_author_id, msgs",
-                  [(cfg.channel_id, parent, child, n) for (parent, child), n in d.replies.items()])
+# Named one by one, not looped into globals(), so each stays greppable.
+rebuild_type = _rebuilder("type")
+rebuild_activity = _rebuilder("activity")
+rebuild_heat = _rebuilder("heat")
+rebuild_reply = _rebuilder("reply")
+rebuild_provider = _rebuilder("provider")
+rebuild_embed_type = _rebuilder("embed_type")
+rebuild_emoji = _rebuilder("emoji")
+rebuild_reaction = _rebuilder("reaction")
+rebuild_attachment = _rebuilder("attachment")
+rebuild_response = _rebuilder("response")
+rebuild_starter = _rebuilder("starter")
+rebuild_edit_speed = _rebuilder("edit_speed")
 
 
 def _replace_rows(conn: sqlite3.Connection, table: str, channel_id: str, columns: str,
@@ -555,19 +590,6 @@ def rebuild_link(conn: sqlite3.Connection, cfg: Config, ids: Identities, derived
                    if key.split("/", 1)[0] in keep])
 
 
-def rebuild_provider(conn: sqlite3.Connection, cfg: Config, ids: Identities, derived=None) -> int:
-    d = derived or derive(conn, cfg, ids)
-    return _write(conn, cfg.channel_id, "provider", "channel_id, author_id, provider, embeds",
-                  [(cfg.channel_id, author, provider, n)
-                   for (author, provider), n in d.providers.items()])
-
-
-def rebuild_embed_type(conn: sqlite3.Connection, cfg: Config, ids: Identities, derived=None) -> int:
-    d = derived or derive(conn, cfg, ids)
-    return _write(conn, cfg.channel_id, "embed_type", "channel_id, embed_type, embeds",
-                  [(cfg.channel_id, kind, n) for kind, n in d.embed_types.items()])
-
-
 def rebuild_media(conn: sqlite3.Connection, cfg: Config, ids: Identities, derived=None) -> int:
     d = derived or derive(conn, cfg, ids)
     _replace_rows(conn, "rollup_media_post", cfg.channel_id,
@@ -580,50 +602,6 @@ def rebuild_media(conn: sqlite3.Connection, cfg: Config, ids: Identities, derive
                   [(cfg.channel_id, url, entry[3], entry[4], entry[5], entry[6], entry[7],
                     entry[0], entry[1], entry[2])
                    for url, entry in d.media.items()])
-
-
-def rebuild_emoji(conn: sqlite3.Connection, cfg: Config, ids: Identities, derived=None) -> int:
-    d = derived or derive(conn, cfg, ids)
-    return _write(conn, cfg.channel_id, "emoji", "channel_id, emoji, author_id, uses",
-                  [(cfg.channel_id, symbol, author, n)
-                   for (symbol, author), n in d.emoji.items()])
-
-
-def rebuild_reaction(conn: sqlite3.Connection, cfg: Config, ids: Identities, derived=None) -> int:
-    d = derived or derive(conn, cfg, ids)
-    return _write(conn, cfg.channel_id, "reaction", "channel_id, emoji, author_id, count",
-                  [(cfg.channel_id, name, author, n)
-                   for (name, author), n in d.reactions.items()])
-
-
-def rebuild_attachment(conn: sqlite3.Connection, cfg: Config, ids: Identities, derived=None) -> int:
-    d = derived or derive(conn, cfg, ids)
-    return _write(conn, cfg.channel_id, "attachment", "channel_id, mime, author_id, count",
-                  [(cfg.channel_id, mime, author, n)
-                   for (mime, author), n in d.attachments.items()])
-
-
-def rebuild_response(conn: sqlite3.Connection, cfg: Config, ids: Identities, derived=None) -> int:
-    d = derived or derive(conn, cfg, ids)
-    return _write(conn, cfg.channel_id, "response",
-                  "channel_id, author_id, replies, total_seconds, capped_replies",
-                  [(cfg.channel_id, author, r, s, capped)
-                   for author, (r, s, capped) in d.response.items()])
-
-
-def rebuild_starter(conn: sqlite3.Connection, cfg: Config, ids: Identities, derived=None) -> int:
-    d = derived or derive(conn, cfg, ids)
-    return _write(conn, cfg.channel_id, "starter", "channel_id, author_id, starters",
-                  [(cfg.channel_id, author, n) for author, n in d.starters.items()])
-
-
-def rebuild_edit_speed(conn: sqlite3.Connection, cfg: Config, ids: Identities,
-                       derived=None) -> int:
-    d = derived or derive(conn, cfg, ids)
-    return _write(conn, cfg.channel_id, "edit_speed",
-                  "channel_id, author_id, edits, total_seconds, capped_edits",
-                  [(cfg.channel_id, author, e, s, capped)
-                   for author, (e, s, capped) in d.edit_speed.items()])
 
 
 # Resolved through globals() at call time, so a caller (or a test) can replace
@@ -844,8 +822,3 @@ def _record_failure(conn: sqlite3.Connection, stamp: str, run_clock: float,
         )])
     except sqlite3.Error:
         pass
-
-
-BUILDERS: dict[str, Callable[..., int]] = {
-    family: globals()[name] for family, name in REBUILDER_NAMES.items()
-}
