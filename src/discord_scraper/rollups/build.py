@@ -271,7 +271,8 @@ DERIVE_HEARTBEAT_ROWS = 256
 
 
 def derive(conn: sqlite3.Connection, cfg: Config, ids: Identities,
-           on_progress: Callable[[int, float], None] | None = None) -> Derived:
+           on_progress: Callable[[int, float], None] | None = None,
+           display: dict[str, str] | None = None) -> Derived:
     """One pass over the channel's messages, feeding all fourteen families.
 
     Streams rows rather than fetching them: ``raw`` is 483 MB on the reference
@@ -283,7 +284,7 @@ def derive(conn: sqlite3.Connection, cfg: Config, ids: Identities,
     heartbeat without the loop knowing what a heartbeat is.
     """
     d = Derived()
-    display = latest_display_names(conn)
+    display = display if display is not None else latest_display_names(conn)
     stop = load_stopwords(cfg) | _name_tokens(conn, display)
     allowed = set(cfg.count_types) if cfg.count_types else None
 
@@ -759,9 +760,12 @@ def rebuild_all(
     try:
         phase("deriving")
         create_rollup_tables(conn)
-        ids = resolve_identities(conn, cfg)
+        # Read once and shared: the lookup scans every message, and the
+        # identities, the derive and the stored names each used to repeat it.
+        display = latest_display_names(conn)
+        ids = resolve_identities(conn, cfg, display)
         config_hash = config_digest(cfg, conn)
-        derived = derive(conn, cfg, ids, on_progress=heartbeat)
+        derived = derive(conn, cfg, ids, on_progress=heartbeat, display=display)
 
         # Mark every family in flight before the write transaction opens. It is
         # committed a moment early, but it is what makes a poll during the write
@@ -780,7 +784,7 @@ def rebuild_all(
         # transaction (a job runner, a test), where a nested BEGIN raises.
         conn.execute("SAVEPOINT rollup_rebuild")
         try:
-            store_author_names(conn, cfg, ids)
+            store_author_names(conn, cfg, ids, display)
             write_stats(conn, cfg.channel_id, derived)
             for family in FAMILIES:
                 family_start = time.monotonic()

@@ -200,3 +200,17 @@ def test_rebuild_reads_the_message_table_a_bounded_number_of_times(seeded_db, cf
             or "CONTENT" in statement.upper()]
     assert len(scans) <= 6, scans
     assert len(wide) <= 2, wide
+
+
+def test_rebuild_looks_up_display_names_once(seeded_db, cfg):
+    """The lookup scans every message; the identities, the derive and the stored
+    names used to run it once each."""
+    seen: list[str] = []
+    seeded_db.set_trace_callback(seen.append)
+    try:
+        rebuild_all(seeded_db, cfg)
+    finally:
+        seeded_db.set_trace_callback(None)
+
+    lookups = [statement for statement in seen if "PARTITION BY author_id" in statement]
+    assert len(lookups) == 1, lookups

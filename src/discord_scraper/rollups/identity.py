@@ -170,9 +170,13 @@ def _author_counts(conn: sqlite3.Connection, cfg: Config) -> list[tuple[str, int
     ]
 
 
-def resolve_identities(conn: sqlite3.Connection, cfg: Config) -> Identities:
-    """The channel's authors as displayable rows, alts folded together."""
-    display = latest_display_names(conn)
+def resolve_identities(conn: sqlite3.Connection, cfg: Config,
+                       display: dict[str, str] | None = None) -> Identities:
+    """The channel's authors as displayable rows, alts folded together.
+
+    ``display`` takes names already looked up, so a rebuild reads them once.
+    """
+    display = display if display is not None else latest_display_names(conn)
     merge = _merge_map(conn, cfg)
     hidden = _hidden(conn, cfg)
 
