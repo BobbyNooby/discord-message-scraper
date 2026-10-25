@@ -11,9 +11,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+from discord_scraper.timeutil import utc_stamp
 
 
 def set_worker_state(conn: sqlite3.Connection, key: str, value: object) -> None:
@@ -22,7 +20,7 @@ def set_worker_state(conn: sqlite3.Connection, key: str, value: object) -> None:
         INSERT INTO worker_state (key, value, updated_at) VALUES (?, ?, ?)
         ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
         """,
-        (str(key), str(value), _now()),
+        (str(key), str(value), utc_stamp()),
     )
     conn.commit()
 
@@ -34,7 +32,7 @@ def worker_state(conn: sqlite3.Connection, key: str) -> str | None:
 
 def record_worker_seen(conn: sqlite3.Connection, now: str | None = None) -> None:
     """The heartbeat the admin board reads to tell "idle" from "died"."""
-    set_worker_state(conn, "last_seen_at", now or _now())
+    set_worker_state(conn, "last_seen_at", now or utc_stamp())
 
 
 # The banner's thresholds (spec §11.7). Three days is the point where "the data

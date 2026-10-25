@@ -9,7 +9,7 @@ half the year, which is why "auto" resolves to a real zone and not to
 from __future__ import annotations
 
 import os
-from datetime import datetime, tzinfo
+from datetime import datetime, timezone, tzinfo
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -59,3 +59,17 @@ def local_parts(iso_utc: str, tz: str | tzinfo) -> tuple[str, int, int, int]:
     zone = resolve_tz(tz) if isinstance(tz, str) else tz
     local = datetime.fromisoformat(iso_utc).astimezone(zone)
     return local.date().isoformat(), local.year, local.weekday(), local.hour
+
+
+def utc_stamp() -> str:
+    """Now in UTC, to the second: what every job, worker and admin row records."""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def precise_stamp() -> str:
+    """Now with the host's offset, to the microsecond: rebuild stamps.
+
+    The API keys its payload cache on the rebuild stamp, so two rebuilds inside
+    one second must not share one.
+    """
+    return datetime.now().astimezone().isoformat(timespec="microseconds")

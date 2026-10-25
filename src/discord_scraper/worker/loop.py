@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from discord_scraper.config import Config
+from discord_scraper.timeutil import utc_stamp
 from discord_scraper.worker.jobs import enqueue, fail_orphaned_jobs, run_pending, token_for
 from discord_scraper.worker.scheduler import (
     BACKUP_EVERY_HOURS,
@@ -25,10 +26,6 @@ from discord_scraper.worker.scheduler import (
 from discord_scraper.worker.state import record_worker_seen, set_worker_state, worker_state
 
 POLL_SECONDS = 15
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _hours_since(stamp: str | None) -> float:
@@ -82,14 +79,14 @@ def _queue_scheduled_work(conn: sqlite3.Connection, cfg: Config) -> None:
     # No token yet (one can be saved from /admin later): nothing to try.
     if (schedule_enabled(conn, effective) and token_for(conn, cfg)
             and scheduled_ingest_due(conn, effective)):
-        set_worker_state(conn, "last_ingest_attempt_at", _now())
+        set_worker_state(conn, "last_ingest_attempt_at", utc_stamp())
         set_worker_state(conn, "ingest_jitter_seconds", jitter_seconds(conn, cfg=effective))
         # A token the probe called dead is asked about rather than scraped with:
         # one `/users/@me` per interval, and a working answer lifts the pause,
         # so a one-off 401 does not stop the schedule until someone notices.
         enqueue(conn, channel, "probe" if ingest_paused(conn) else "catch_up")
     if scheduled_backup_due(conn):
-        set_worker_state(conn, "last_backup_attempt_at", _now())
+        set_worker_state(conn, "last_backup_attempt_at", utc_stamp())
         enqueue(conn, channel, "backup")
 
 
@@ -108,7 +105,7 @@ def _on_start(conn: sqlite3.Connection, cfg: Config) -> None:
     if ingest_paused(conn) and token_for(conn, cfg):
         # Counted as this interval's attempt, so the schedule does not queue a
         # second probe on the same pass; a working answer clears it again.
-        set_worker_state(conn, "last_ingest_attempt_at", _now())
+        set_worker_state(conn, "last_ingest_attempt_at", utc_stamp())
         enqueue(conn, overrides.effective_for(conn, cfg).channel_id, "probe")
 
 

@@ -14,17 +14,13 @@ different things and are kept apart here:
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
 from typing import Callable
 
 from discord_scraper.scraper.api import get_current_user
+from discord_scraper.timeutil import utc_stamp
 from discord_scraper.worker.state import set_worker_state
 
 TIMEOUT = 15.0
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def probe_token(
@@ -51,7 +47,7 @@ def probe_token(
 
     if status == 200:
         set_worker_state(conn, "token_status", "ok")
-        set_worker_state(conn, "token_last_ok_at", _now())
+        set_worker_state(conn, "token_last_ok_at", utc_stamp())
     elif status == 401:
         set_worker_state(conn, "token_status", "dead")
     else:
@@ -64,5 +60,5 @@ def probe_token(
         if not known_dead:
             # A 403 means the token authenticated and the channel is the problem.
             set_worker_state(conn, "token_status", "ok" if status == 403 else "unknown")
-    set_worker_state(conn, "token_checked_at", _now())
+    set_worker_state(conn, "token_checked_at", utc_stamp())
     return status == 200, status

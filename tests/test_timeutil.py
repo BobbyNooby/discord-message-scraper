@@ -23,3 +23,15 @@ def test_a_resolved_zone_answers_like_its_name():
 def test_auto_resolves_to_the_host_zone():
     tz = resolve_tz("auto")
     assert datetime.now(tz).utcoffset() == datetime.now().astimezone().utcoffset()
+
+
+def test_the_two_stamp_formats_stay_what_their_readers_expect():
+    from discord_scraper.timeutil import precise_stamp, utc_stamp
+
+    # Control-plane rows: UTC, whole seconds.
+    plain = datetime.fromisoformat(utc_stamp())
+    assert plain.utcoffset().total_seconds() == 0 and plain.microsecond == 0
+    # Rebuild stamps: microseconds, so two rebuilds in one second stay distinct.
+    precise = precise_stamp()
+    assert datetime.fromisoformat(precise).tzinfo is not None
+    assert len(precise.split(".")[1].split("+")[0].split("-")[0]) == 6

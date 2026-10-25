@@ -43,7 +43,7 @@ from discord_scraper.rollups.schema import (
     stamp_schema_version,
 )
 from discord_scraper.text import emoji, links, load_stopwords, tokens
-from discord_scraper.timeutil import local_parts, resolve_tz
+from discord_scraper.timeutil import local_parts, precise_stamp, resolve_tz
 
 # Reply latency and edit latency share one window. Beyond a day it is not a
 # "response" any more, and counting it would let one message from last year
@@ -698,13 +698,9 @@ def record_event(
     media URL.
     """
     _record_events(conn, [(
-        started_at or _iso_now(), finished_at, kind, family, phase, message,
+        started_at or precise_stamp(), finished_at, kind, family, phase, message,
         rows, seconds, level, source, scope,
     )])
-
-
-def _iso_now() -> str:
-    return datetime.now().astimezone().isoformat(timespec="microseconds")
 
 
 def rebuild_all(
@@ -734,7 +730,7 @@ def rebuild_all(
     # Microseconds, not seconds: the API caches its payload keyed on provenance,
     # and two rebuilds inside the same second would otherwise be indistinguishable
     # — which is exactly how a stale payload gets served after a rebuild.
-    stamp = now or datetime.now().astimezone().isoformat(timespec="microseconds")
+    stamp = now or precise_stamp()
 
     def phase(name: str) -> None:
         if on_phase is not None:
@@ -774,7 +770,7 @@ def rebuild_all(
         # the real row count and the seconds each family took.
         phase("writing")
         _record_events(conn, [
-            (_iso_now(), None, "family", family, "started", f"{family} started", None, None,
+            (precise_stamp(), None, "family", family, "started", f"{family} started", None, None,
              "info", "rebuild", "rollup")
             for family in FAMILIES
         ])
@@ -789,7 +785,7 @@ def rebuild_all(
             write_stats(conn, cfg.channel_id, derived)
             for family in FAMILIES:
                 family_start = time.monotonic()
-                family_at = _iso_now()
+                family_at = precise_stamp()
                 counts[family] = globals()[REBUILDER_NAMES[family]](conn, cfg, ids, derived)
                 family_seconds[family] = (family_at, time.monotonic() - family_start)
                 set_provenance(
@@ -820,7 +816,7 @@ def rebuild_all(
             pass
         raise
 
-    finished_at = _iso_now()
+    finished_at = precise_stamp()
     total_rows = sum(counts.values())
     elapsed = time.monotonic() - run_clock
     _record_events(conn, [
@@ -842,7 +838,7 @@ def _record_failure(conn: sqlite3.Connection, stamp: str, run_clock: float,
     """Log a failed run. Never masks the original exception."""
     try:
         _record_events(conn, [(
-            stamp, _iso_now(), "run", None, "failed",
+            stamp, precise_stamp(), "run", None, "failed",
             f"rebuild failed: {type(exc).__name__}: {exc}", None,
             round(time.monotonic() - run_clock, 3), "error", "rebuild", "rollup",
         )])

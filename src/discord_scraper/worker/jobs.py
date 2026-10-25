@@ -17,6 +17,7 @@ from typing import Any, Callable
 from discord_scraper.config import Config
 from discord_scraper.rollups.build import rebuild_all
 from discord_scraper.scraper.api import AuthError
+from discord_scraper.timeutil import utc_stamp
 from discord_scraper.worker.probe import probe_token
 from discord_scraper.worker.state import record_worker_seen, set_worker_state, worker_state
 
@@ -40,14 +41,10 @@ class JobRunning(JobNotCancellable):
     """A job already in flight — refusing is the honest answer."""
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
 def enqueue(conn: sqlite3.Connection, channel_id: str, kind: str) -> int:
     cursor = conn.execute(
         "INSERT INTO jobs (channel_id, kind, status, requested_at) VALUES (?, ?, 'queued', ?)",
-        (str(channel_id), str(kind), _now()),
+        (str(channel_id), str(kind), utc_stamp()),
     )
     conn.commit()
     return int(cursor.lastrowid)
@@ -77,7 +74,7 @@ def cancel_job(conn: sqlite3.Connection, job_id: int) -> dict[str, Any]:
         )
     if previous != "queued":
         raise JobNotCancellable(f"job {job_id} is already {previous} — nothing to cancel")
-    now = _now()
+    now = utc_stamp()
     cursor = conn.execute(
         "UPDATE jobs SET status = ?, finished_at = ?, phase = ? "
         "WHERE id = ? AND status = 'queued'",
@@ -101,7 +98,7 @@ def claim_next(conn: sqlite3.Connection) -> dict[str, Any] | None:
         RETURNING id, channel_id, kind, status, requested_at, started_at,
                   finished_at, result, error
         """,
-        (_now(),),
+        (utc_stamp(),),
     ).fetchone()
     conn.commit()
     return None if found is None else dict(zip(JOB_FIELDS, found))
@@ -151,13 +148,13 @@ def _ingest(conn: sqlite3.Connection, cfg: Config, kind: str) -> str:
             # The feed itself just proved the token dead; waiting for the next
             # probe left the public banner green for days.
             set_worker_state(conn, "token_status", "dead")
-            set_worker_state(conn, "token_checked_at", _now())
+            set_worker_state(conn, "token_checked_at", utc_stamp())
         record_event(conn, source="worker", scope="ingest", level="error", phase="failed",
                      message=f"{kind} failed: {type(exc).__name__}: {exc}",
                      seconds=round(time.monotonic() - started, 3))
         raise
     seconds = round(time.monotonic() - started, 3)
-    now = _now()
+    now = utc_stamp()
     set_worker_state(conn, "last_ingest_at", now)
     set_worker_state(conn, "last_ingest_added", added)
     set_worker_state(conn, "ingest_failures", 0)
@@ -270,7 +267,7 @@ def _backup(conn: sqlite3.Connection, cfg: Config) -> str:
         partial.unlink(missing_ok=True)
         raise
     # Recorded before pruning: the copy exists whether or not an old one can go.
-    set_worker_state(conn, "last_backup_at", _now())
+    set_worker_state(conn, "last_backup_at", utc_stamp())
     kept_back = []
     for old in sorted(folder.glob(f"{stem}{BACKUP_GLOB}"))[:-backup_keep(conn)]:
         try:
@@ -296,7 +293,7 @@ def fail_orphaned_jobs(conn: sqlite3.Connection) -> int:
     cursor = conn.execute(
         "UPDATE jobs SET status = 'failed', finished_at = ?, phase = 'failed', "
         "error = 'the worker stopped before this job finished' WHERE status = 'running'",
-        (_now(),),
+        (utc_stamp(),),
     )
     conn.commit()
     try:
@@ -364,14 +361,14 @@ def run_job(
         conn.execute(
             "UPDATE jobs SET status = 'failed', finished_at = ?, phase = 'failed', "
             "error = ? WHERE id = ?",
-            (_now(), f"{type(exc).__name__}: {exc}", job["id"]),
+            (utc_stamp(), f"{type(exc).__name__}: {exc}", job["id"]),
         )
         conn.commit()
         raise
     conn.execute(
         "UPDATE jobs SET status = 'done', finished_at = ?, phase = 'finished', "
         "result = ? WHERE id = ?",
-        (_now(), result, job["id"]),
+        (utc_stamp(), result, job["id"]),
     )
     conn.commit()
     record_worker_seen(conn)
