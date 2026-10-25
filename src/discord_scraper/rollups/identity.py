@@ -30,17 +30,23 @@ def latest_display_names(conn: sqlite3.Connection) -> dict[str, str]:
     people rename themselves, and ``MAX`` would pick the alphabetically loudest
     name they have ever used rather than the one they use now.
     """
+    # Rank by id first and parse `raw` only for each author's winner: parsing it
+    # for every message was 25 s on the reference database, this is about 6.
+    # NOT INDEXED reads the table in order; walking idx_author instead jumps to
+    # every row once and took 16 s.
     rows = conn.execute(
         """
         WITH ranked AS (
-            SELECT author_id,
-                   json_extract(raw, '$.author.global_name') AS global_name,
-                   COALESCE(json_extract(raw, '$.author.username'), author_username) AS username,
+            SELECT id,
                    ROW_NUMBER() OVER (PARTITION BY author_id
                                       ORDER BY created_at DESC, id DESC) AS rn
-              FROM messages
+              FROM messages NOT INDEXED
         )
-        SELECT author_id, global_name, username FROM ranked WHERE rn = 1
+        SELECT m.author_id,
+               json_extract(m.raw, '$.author.global_name'),
+               COALESCE(json_extract(m.raw, '$.author.username'), m.author_username)
+          FROM ranked JOIN messages AS m ON m.id = ranked.id
+         WHERE ranked.rn = 1
         """
     ).fetchall()
     return {

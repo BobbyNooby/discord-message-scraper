@@ -20,6 +20,17 @@ def test_display_name_is_the_most_recent_not_the_loudest(seeded_db):
     assert "OldName" not in names.values()
 
 
+def test_display_name_breaks_a_same_second_tie_by_the_newer_id(mem_db):
+    """Two messages stamped the same instant: the higher id is the later one."""
+    rows = [
+        ("900", "u9", "fake_user", "a", "2026-03-01T10:00:00+00:00", None, None, 0, 0,
+         '{"author": {"global_name": "Earlier"}}'),
+        ("901", "u9", "fake_user", "b", "2026-03-01T10:00:00+00:00", None, None, 0, 0,
+         '{"author": {"global_name": "Later"}}'),
+    ]
+    seed_messages(mem_db, rows)
+    assert latest_display_names(mem_db) == {"u9": "Later"}
+
 def test_bots_are_excluded_but_only_when_the_flag_is_true(seeded_db, cfg, tmp_path):
     keep = resolve_identities(seeded_db, cfg_fixture(tmp_path, exclude_bots=False))
     drop = resolve_identities(seeded_db, cfg_fixture(tmp_path, exclude_bots=True))
