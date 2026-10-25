@@ -44,18 +44,10 @@ VALUES
 
 
 def open_db() -> sqlite3.Connection:
+    from discord_scraper.db import connect_writable
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    # WAL is a persistent, database-level setting, not a per-connection one:
-    # one writer + many readers, and a reader is never blocked by an in-flight
-    # commit. In the default 'delete' mode a committing writer blocks readers
-    # outright, so any concurrent read fails with "database is locked".
-    conn.execute("PRAGMA journal_mode=WAL")
-    # Wait for the write lock instead of failing immediately.
-    conn.execute("PRAGMA busy_timeout=10000")
-    # Durable under WAL (committed transactions survive a crash) at a fraction
-    # of the fsync cost of the default FULL.
-    conn.execute("PRAGMA synchronous=NORMAL")
+    conn = connect_writable(DB_PATH)
     conn.executescript(SCHEMA)
     _migrate(conn)
     conn.executescript(INDEXES)

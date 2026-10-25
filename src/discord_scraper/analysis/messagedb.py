@@ -8,6 +8,7 @@ from pathlib import Path
 
 from . import queries
 from .db import REAL_MESSAGES
+from discord_scraper.db import connect_readonly, connect_writable
 from discord_scraper.scraper.config import DB_PATH
 
 
@@ -29,9 +30,7 @@ class MessageDB:
     """
 
     def __init__(self, path: str | Path = DB_PATH, read_only: bool = True):
-        uri = f"file:{path}?mode=ro" if read_only else f"file:{path}"
-        self.conn = sqlite3.connect(uri, uri=True)
-        self.conn.row_factory = sqlite3.Row
+        self.conn = connect_readonly(path) if read_only else connect_writable(path)
 
     def close(self) -> None:
         self.conn.close()
