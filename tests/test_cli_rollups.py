@@ -32,6 +32,30 @@ def test_status_is_stale_before_a_rebuild_and_current_after(seeded_db_path, tmp_
     assert config.channel_id == "c1"
 
 
+def test_status_counts_the_channel_once_not_once_per_family(seeded_db_path, tmp_path,
+                                                             monkeypatch, capsys):
+    """A count of the channel is a scan of the whole messages table."""
+    import discord_scraper.cli as cli
+
+    config_arg = ["--config", str(tmp_path / "config.toml")]
+    cfg_fixture(tmp_path)
+    assert main(["rollups", "rebuild", "--db", str(seeded_db_path), *config_arg]) == 0
+    capsys.readouterr()
+
+    seen: list[str] = []
+    real = cli._connect
+
+    def traced(path):
+        conn = real(path)
+        conn.set_trace_callback(seen.append)
+        return conn
+
+    monkeypatch.setattr(cli, "_connect", traced)
+    assert main(["rollups", "status", "--db", str(seeded_db_path), *config_arg]) == 0
+    assert capsys.readouterr().out.count("current") == len(FAMILIES)
+    counts = [statement for statement in seen if "COUNT(*), MAX(id)" in statement]
+    assert len(counts) == 1, counts
+
 def test_rebuild_writes_rows_and_reports_counts(seeded_db_path, tmp_path, capsys):
     cfg_fixture(tmp_path)
     assert main(["rollups", "rebuild", "--db", str(seeded_db_path),

@@ -158,7 +158,7 @@ def _rollups_status(args) -> int:
     from pathlib import Path
 
     from discord_scraper.rollups.build import config_digest
-    from discord_scraper.rollups.schema import FAMILIES, is_stale
+    from discord_scraper.rollups.schema import FAMILIES, is_stale, source_shape
 
     if not Path(args.db).exists():
         print(f"no database at {args.db}", file=sys.stderr)
@@ -172,6 +172,8 @@ def _rollups_status(args) -> int:
             return 0
         width = max(len(family) for family in FAMILIES)
         built = _has_table(conn, "rollup_meta")
+        # Counted once for the whole report, not once per family.
+        source = source_shape(conn, channel)
         for family in FAMILIES:
             table = f"rollup_{family}"
             rows = (
@@ -179,7 +181,8 @@ def _rollups_status(args) -> int:
                              (channel,)).fetchone()[0]
                 if _has_table(conn, table) else 0
             )
-            stale = not built or is_stale(conn, channel, family, config_hash=digest)
+            stale = not built or is_stale(conn, channel, family, config_hash=digest,
+                                          source=source)
             _report(family, width, rows, "stale" if stale else "current")
         return 0
     finally:

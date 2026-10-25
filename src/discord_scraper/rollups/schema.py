@@ -552,6 +552,7 @@ def is_stale(
     *,
     config_hash: str | None = None,
     cheap: bool = False,
+    source: tuple[int, str] | None = None,
 ) -> bool:
     """True when the source or the word-list inputs no longer match the build.
 
@@ -559,6 +560,8 @@ def is_stale(
     alone misses one of them. ``config_hash`` is optional because it costs a
     stopword-file read to compute — callers that have it (the CLI's ``status``)
     also catch "the stopword list changed, so ``rollup_word`` is out of date".
+    ``source`` is ``source_shape`` already read, for a caller asking about every
+    family: each count is a scan of the whole messages table.
     """
     recorded = provenance(conn, channel_id, family)
     if recorded is None:
@@ -596,15 +599,24 @@ def is_stale(
                 return True
         return (recorded["source_max_message_id"] or "") != ((newest[0] if newest else "") or "")
 
-    try:
-        current_count, current_max = conn.execute(
-            "SELECT COUNT(*), MAX(id) FROM messages WHERE channel_id = ?", (channel_id,)
-        ).fetchone()
-    except sqlite3.OperationalError:
+    shape = source if source is not None else source_shape(conn, channel_id)
+    if shape is None:
         # No messages table at all: nothing can be current, and guessing
         # "current" is the failure this flag exists to prevent.
         return True
+    current_count, current_max = shape
     return (
-        int(recorded["source_count"]) != int(current_count or 0)
-        or (recorded["source_max_message_id"] or "") != (current_max or "")
+        int(recorded["source_count"]) != current_count
+        or (recorded["source_max_message_id"] or "") != current_max
     )
+
+
+def source_shape(conn: sqlite3.Connection, channel_id: str) -> tuple[int, str] | None:
+    """The channel's message count and newest id, or None without a messages table."""
+    try:
+        count, newest = conn.execute(
+            "SELECT COUNT(*), MAX(id) FROM messages WHERE channel_id = ?", (channel_id,)
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    return int(count or 0), newest or ""
