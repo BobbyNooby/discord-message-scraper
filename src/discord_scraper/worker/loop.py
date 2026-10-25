@@ -38,6 +38,10 @@ def _hours_since(stamp: str | None) -> float:
         then = datetime.fromisoformat(stamp)
     except ValueError:
         return float("inf")
+    if then.tzinfo is None:
+        # A stamp written without a zone (by hand, or by an older build) is UTC,
+        # as `banner_for` reads it; subtracting it from an aware time raised.
+        then = then.replace(tzinfo=timezone.utc)
     return (datetime.now(timezone.utc) - then).total_seconds() / 3600
 
 

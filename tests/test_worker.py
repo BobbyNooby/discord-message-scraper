@@ -771,3 +771,14 @@ def test_the_token_can_come_from_a_file(tmp_path, monkeypatch):
     secret.write_text("from-a-file\n")
     assert _secrets_from({"DISCORD_TOKEN_FILE": str(secret)}).token == "from-a-file"
     assert _secrets_from({"DISCORD_TOKEN": "env", "DISCORD_TOKEN_FILE": str(secret)}).token == "env"
+
+
+def test_a_stamp_without_a_zone_is_read_as_utc_rather_than_crashing_the_loop(two_conns, cfg, monkeypatch):
+    from discord_scraper.worker import loop
+
+    conn, other = two_conns
+    set_worker_state(conn, "backup_enabled", "false")
+    set_worker_state(conn, "last_ingest_at", "2000-01-01T00:00:00")
+    monkeypatch.setitem(loop.__dict__, "run_pending", lambda conn, cfg: 0)
+    loop.run_forever(conn, cfg, iterations=1, sleep=lambda _s: None)
+    assert [row[0] for row in other.execute("SELECT kind FROM jobs")] == ["catch_up"]
