@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from discord_scraper.config import get_config, load_config
+from discord_scraper.config import load_config
 
 
 def _env(tmp_path, monkeypatch, **values):
@@ -76,14 +76,6 @@ def test_a_missing_token_fails_loudly_and_names_the_key(tmp_path, monkeypatch):
         assert "DISCORD_TOKEN" in str(exc)
     else:
         raise AssertionError("expected SystemExit for a missing token")
-
-
-def test_get_config_is_cached(tmp_path, monkeypatch):
-    env = _env(tmp_path, monkeypatch, DISCORD_TOKEN="t")
-    (tmp_path / "config.toml").write_text('[source]\nchannel_id = "1"\n')
-    first = get_config(env_path=env, config_path=tmp_path / "config.toml")
-    second = get_config(env_path=env, config_path=tmp_path / "config.toml")
-    assert first is second
 
 
 def test_the_example_config_actually_loads(tmp_path):

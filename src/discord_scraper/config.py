@@ -445,20 +445,3 @@ def load_settings(
 def config_from_settings(settings: Settings) -> Config:
     """A ``Config`` with no secrets, for code paths that never call Discord."""
     return Config(secrets=Secrets(token=""), settings=settings)
-
-
-_CACHE: dict[tuple[str, str], Config] = {}
-
-
-def get_config(
-    env_path: str | Path | None = None,
-    config_path: str | Path | None = None,
-) -> Config:
-    """Cached ``load_config`` — reading the environment on every request would
-    be wasteful, and the values do not change while the process runs."""
-    env_file = _or_default(env_path, ".env")
-    toml_file = _or_default(config_path, "config.toml")
-    key = (str(env_file), str(toml_file))
-    if key not in _CACHE:
-        _CACHE[key] = load_config(env_file, toml_file)
-    return _CACHE[key]
