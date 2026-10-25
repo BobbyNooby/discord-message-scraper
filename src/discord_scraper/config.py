@@ -229,12 +229,31 @@ def is_timezone(name: str) -> bool:
     return True
 
 
-def _int_setting(key: str, value: Any) -> int:
-    """A whole number, or a config error that names where it came from."""
+def _int_setting(key: str, value: Any, low: int | None = None, high: int | None = None) -> int:
+    """A whole number inside its range, or a config error that names where it came from."""
     try:
-        return int(value)
+        number = int(value)
     except (TypeError, ValueError):
         raise SystemExit(f'{key}: "{value}" is not a whole number') from None
+    if (low is not None and number < low) or (high is not None and number > high):
+        bounds = f"{low}-{high}" if high is not None else f">= {low}"
+        raise SystemExit(f"{key}: {number} is out of range ({bounds})")
+    return number
+
+
+def _choice_setting(key: str, value: Any, choices: tuple[str, ...]) -> str:
+    """One of a closed set of words; anything else is a typo worth reporting."""
+    text = str(value)
+    if text not in choices:
+        raise SystemExit(f'{key}: "{text}" is not one of: ' + ", ".join(choices))
+    return text
+
+
+def _words_setting(key: str, value: Any, what: str) -> list[str]:
+    """A list of strings, where a bare string would otherwise iterate as letters."""
+    if not isinstance(value, (list, tuple)) or not all(isinstance(item, str) for item in value):
+        raise SystemExit(f"{key}: {_display(value)} is not a list of {what}")
+    return list(value)
 
 
 def _display(value: Any) -> str:
@@ -296,52 +315,17 @@ def _settings_from(
         "source.exclude_bots", source.get("exclude_bots", True)
     )
 
-    cron_hours = _int_setting("worker.cron_hours", worker.get("cron_hours", 6))
-    if not MIN_CRON_HOURS <= cron_hours <= MAX_CRON_HOURS:
-        raise SystemExit(
-            f"worker.cron_hours: {cron_hours} is out of range "
-            f"({MIN_CRON_HOURS}-{MAX_CRON_HOURS})"
-        )
-
-    show_recent = _int_setting("ui.show_recent", ui.get("show_recent", 5))
-    if not 0 <= show_recent <= MAX_SHOW_RECENT:
-        raise SystemExit(
-            f"ui.show_recent: {show_recent} is out of range (0-{MAX_SHOW_RECENT})"
-        )
-
-    media_top_n = _int_setting("media.top_n", media.get("top_n", 24))
-    if media_top_n < 0:
-        raise SystemExit(f"media.top_n: {media_top_n} is out of range (>= 0)")
-
-    media_thumbnails = str(media.get("thumbnails", "proxy"))
-    if media_thumbnails not in THUMBNAIL_MODES:
-        raise SystemExit(
-            f'media.thumbnails: "{media_thumbnails}" is not one of: '
-            + ", ".join(THUMBNAIL_MODES)
-        )
-
-    allowlist = str(access.get("allowlist", "posted"))
-    if allowlist not in ALLOWLIST_MODES:
-        raise SystemExit(
-            f'access.allowlist: "{allowlist}" is not one of: ' + ", ".join(ALLOWLIST_MODES)
-        )
-
-    packs = stop.get("packs", ["en"])
-    if not isinstance(packs, (list, tuple)) or not all(
-        isinstance(p, str) for p in packs
-    ):
-        raise SystemExit(
-            f"stopwords.packs: {_display(packs)} is not a list of pack names "
-            '(for example ["en"])'
-        )
-
-    ignore = stop.get("ignore", [])
-    if not isinstance(ignore, (list, tuple)) or not all(
-        isinstance(w, str) for w in ignore
-    ):
-        raise SystemExit(
-            f"stopwords.ignore: {_display(ignore)} is not a list of words"
-        )
+    cron_hours = _int_setting("worker.cron_hours", worker.get("cron_hours", 6),
+                              MIN_CRON_HOURS, MAX_CRON_HOURS)
+    show_recent = _int_setting("ui.show_recent", ui.get("show_recent", 5), 0, MAX_SHOW_RECENT)
+    media_top_n = _int_setting("media.top_n", media.get("top_n", 24), 0)
+    media_thumbnails = _choice_setting("media.thumbnails", media.get("thumbnails", "proxy"),
+                                       THUMBNAIL_MODES)
+    allowlist = _choice_setting("access.allowlist", access.get("allowlist", "posted"),
+                                ALLOWLIST_MODES)
+    packs = _words_setting("stopwords.packs", stop.get("packs", ["en"]),
+                           'pack names (for example ["en"])')
+    ignore = _words_setting("stopwords.ignore", stop.get("ignore", []), "words")
 
     stop_dir = stop.get("dir")
     if stop_dir:
@@ -366,30 +350,15 @@ def _settings_from(
     else:
         stopword_dir = root / "stopwords.d"
 
-    week_start = str(ui.get("week_start", "monday"))
-    if week_start not in WEEK_START_DAYS:
-        raise SystemExit(
-            f'ui.week_start: "{week_start}" is not one of: ' + ", ".join(WEEK_START_DAYS)
-        )
-
-    time_format = str(ui.get("time_format", "24h"))
-    if time_format not in TIME_FORMATS:
-        raise SystemExit(
-            f'ui.time_format: "{time_format}" is not one of: ' + ", ".join(TIME_FORMATS)
-        )
+    week_start = _choice_setting("ui.week_start", ui.get("week_start", "monday"), WEEK_START_DAYS)
+    time_format = _choice_setting("ui.time_format", ui.get("time_format", "24h"), TIME_FORMATS)
 
     identity_raw = raw.get("identity", {})
     if not isinstance(identity_raw, dict):
         raise SystemExit(f"identity: {_display(identity_raw)} is not a table of names")
     identities: dict[str, list[str]] = {}
     for name, accounts in identity_raw.items():
-        if not isinstance(accounts, (list, tuple)) or not all(
-            isinstance(a, str) for a in accounts
-        ):
-            raise SystemExit(
-                f"identity.{name}: {_display(accounts)} is not a list of account ids"
-            )
-        identities[str(name)] = [str(a) for a in accounts]
+        identities[str(name)] = _words_setting(f"identity.{name}", accounts, "account ids")
 
     cron_enabled = _bool_setting(
         "worker.cron_enabled", worker.get("cron_enabled", True)
@@ -404,7 +373,7 @@ def _settings_from(
         batch_size=normalize_batch_size(source.get("batch_size", BATCH_SIZE)),
         stopword_packs=list(packs) if packs else ["en"],
         stopword_dir=stopword_dir,
-        ignore_words=list(ignore),
+        ignore_words=ignore,
         identities=identities,
         cron_enabled=cron_enabled,
         cron_hours=cron_hours,
@@ -419,6 +388,11 @@ def _settings_from(
         client_id=str(access.get("client_id", "")),
         redirect_uri=str(access.get("redirect_uri", "")),
     )
+
+
+def _or_default(path: str | Path | None, name: str) -> Path:
+    """The path given, else the checkout's own file of that name."""
+    return Path(path) if path is not None else PROJECT_DIR / name
 
 
 def load_config(
@@ -436,8 +410,8 @@ def load_config(
     is the same idea for ``source.channel_id``: the dashboard boots and warns
     instead of exiting, so a fresh deployment can be finished from the browser.
     """
-    env_file = Path(env_path) if env_path is not None else PROJECT_DIR / ".env"
-    toml_file = Path(config_path) if config_path is not None else PROJECT_DIR / "config.toml"
+    env_file = _or_default(env_path, ".env")
+    toml_file = _or_default(config_path, "config.toml")
 
     env = _load_env_file(env_file)
     raw = tomllib.loads(toml_file.read_text(encoding="utf-8")) if toml_file.exists() else {}
@@ -458,7 +432,7 @@ def load_settings(
     present — demanding a credential for offline work would make the CLI
     unusable on a machine that only reads an existing database.
     """
-    toml_file = Path(config_path) if config_path is not None else PROJECT_DIR / "config.toml"
+    toml_file = _or_default(config_path, "config.toml")
     if not toml_file.exists():
         raise SystemExit(
             f"No config.toml at {toml_file}. Copy config.example.toml there and set "
@@ -482,8 +456,8 @@ def get_config(
 ) -> Config:
     """Cached ``load_config`` — reading the environment on every request would
     be wasteful, and the values do not change while the process runs."""
-    env_file = Path(env_path) if env_path is not None else PROJECT_DIR / ".env"
-    toml_file = Path(config_path) if config_path is not None else PROJECT_DIR / "config.toml"
+    env_file = _or_default(env_path, ".env")
+    toml_file = _or_default(config_path, "config.toml")
     key = (str(env_file), str(toml_file))
     if key not in _CACHE:
         _CACHE[key] = load_config(env_file, toml_file)
