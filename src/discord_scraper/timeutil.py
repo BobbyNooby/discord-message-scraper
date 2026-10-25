@@ -50,7 +50,12 @@ def _host_zone() -> tzinfo:
     return datetime.now().astimezone().tzinfo
 
 
-def local_parts(iso_utc: str, tz: str) -> tuple[str, int, int, int]:
-    """Return ``(local_date, year, weekday, hour)`` for a UTC timestamp."""
-    local = datetime.fromisoformat(iso_utc).astimezone(resolve_tz(tz))
+def local_parts(iso_utc: str, tz: str | tzinfo) -> tuple[str, int, int, int]:
+    """Return ``(local_date, year, weekday, hour)`` for a UTC timestamp.
+
+    Pass a resolved zone when calling per message: resolving ``"auto"`` reads
+    the host's zone files, which made a rebuild minutes slower.
+    """
+    zone = resolve_tz(tz) if isinstance(tz, str) else tz
+    local = datetime.fromisoformat(iso_utc).astimezone(zone)
     return local.date().isoformat(), local.year, local.weekday(), local.hour

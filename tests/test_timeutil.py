@@ -16,6 +16,10 @@ def test_utc_default_is_identity():
     assert local_parts("2026-07-15T23:30:00+00:00", "UTC")[0] == "2026-07-15"
 
 
+def test_a_resolved_zone_answers_like_its_name():
+    stamp = "2026-07-15T23:30:00+00:00"
+    assert local_parts(stamp, resolve_tz("Europe/London")) == local_parts(stamp, "Europe/London")
+
 def test_auto_resolves_to_the_host_zone():
     tz = resolve_tz("auto")
     assert datetime.now(tz).utcoffset() == datetime.now().astimezone().utcoffset()

@@ -43,7 +43,7 @@ from discord_scraper.rollups.schema import (
     stamp_schema_version,
 )
 from discord_scraper.text import emoji, links, load_stopwords, tokens
-from discord_scraper.timeutil import local_parts
+from discord_scraper.timeutil import local_parts, resolve_tz
 
 # Reply latency and edit latency share one window. Beyond a day it is not a
 # "response" any more, and counting it would let one message from last year
@@ -287,6 +287,7 @@ def derive(conn: sqlite3.Connection, cfg: Config, ids: Identities,
     display = display if display is not None else latest_display_names(conn)
     stop = load_stopwords(cfg) | _name_tokens(conn, display)
     allowed = set(cfg.count_types) if cfg.count_types else None
+    zone = resolve_tz(cfg.timezone)
 
     scan_started = time.monotonic()
     last_beat = scan_started
@@ -322,7 +323,7 @@ def derive(conn: sqlite3.Connection, cfg: Config, ids: Identities,
         if author is None:
             continue
 
-        day, year, weekday, hour = local_parts(created, cfg.timezone)
+        day, year, weekday, hour = local_parts(created, zone)
         embeds = _array(parsed, "embeds")
         media = 1 if has_attachments else (1 if embeds else 0)
         body = content or ""

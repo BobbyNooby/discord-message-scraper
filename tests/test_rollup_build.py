@@ -214,3 +214,18 @@ def test_rebuild_looks_up_display_names_once(seeded_db, cfg):
 
     lookups = [statement for statement in seen if "PARTITION BY author_id" in statement]
     assert len(lookups) == 1, lookups
+
+
+def test_rebuild_resolves_the_timezone_once_not_per_message(seeded_db, cfg, monkeypatch):
+    import discord_scraper.rollups.build as build
+
+    calls: list[str] = []
+    real = build.resolve_tz
+
+    def counted(name):
+        calls.append(name)
+        return real(name)
+
+    monkeypatch.setattr(build, "resolve_tz", counted)
+    rebuild_all(seeded_db, cfg)
+    assert len(calls) == 1, calls
