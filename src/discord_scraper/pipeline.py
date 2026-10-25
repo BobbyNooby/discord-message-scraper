@@ -23,7 +23,6 @@ the bottom of the hole it left so the next run resumes there.
 from __future__ import annotations
 
 import argparse
-import sys
 import time
 from datetime import datetime, timezone
 
