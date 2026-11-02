@@ -201,6 +201,20 @@ def test_the_tool_serve_keeps_only_the_worker_flag():
             parser.parse_args(["serve", "--db", "x.db", flag, "v"])
 
 
+def test_the_worker_waits_for_a_channel_instead_of_exiting(seeded_db_path, tmp_path, monkeypatch,
+                                                           capsys):
+    """Exiting here was a crash loop that a channel saved on the board never ended."""
+    from discord_scraper.worker import loop
+
+    config = tmp_path / "config.toml"
+    config.write_text('[source]\nchannel_id = ""\n', encoding="utf-8")
+    ran = []
+    monkeypatch.setattr(loop, "run_forever", lambda conn, cfg: ran.append(cfg.channel_id) or 0)
+    assert main(["serve", "--worker", "--db", str(seeded_db_path), "--config", str(config)]) == 0
+    assert ran == [""]
+    assert "no channel yet" in capsys.readouterr().err
+
+
 def test_the_tool_serve_without_a_worker_points_at_the_dashboard(capsys):
     """No `--worker` means no shape at all: refuse loudly, never quietly no-op."""
     assert main(["serve"]) == 2

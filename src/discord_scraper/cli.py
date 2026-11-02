@@ -305,8 +305,10 @@ def _serve(args) -> int:
         return 2
     config_path = Path(args.config) if args.config else PROJECT_DIR / "config.toml"
     try:
-        # A token may arrive later from /admin, so its absence is a wait, not an exit.
-        cfg = load_config(config_path=config_path, require_token=False)
+        # A token or a channel may arrive later from /admin, so their absence is
+        # a wait, not an exit: exiting here crash-looped a fresh volume, and a
+        # channel saved on the board could never end it.
+        cfg = load_config(config_path=config_path, require_token=False, require_channel=False)
     except SystemExit as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -316,12 +318,15 @@ def _serve(args) -> int:
         print("no Discord token yet — save one from /admin (or set DISCORD_TOKEN); "
               "the worker waits until there is one", file=sys.stderr)
 
-    from discord_scraper import locks
+    from discord_scraper import locks, overrides
     from discord_scraper.db import connect_writable
     from discord_scraper.worker.loop import run_forever
 
     conn = connect_writable(database)
     try:
+        if not overrides.effective_for(conn, cfg).channel_id:
+            print("no channel yet — save one from /admin (or set source.channel_id); "
+                  "the worker waits until there is one", file=sys.stderr)
         # One ingest worker per database. Three of these racing on the same
         # file is how every rebuild started failing; the kernel releases the
         # lock if this process dies, so there is no stale lock to clear.

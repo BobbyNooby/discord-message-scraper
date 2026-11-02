@@ -76,8 +76,9 @@ def _queue_scheduled_work(conn: sqlite3.Connection, cfg: Config) -> None:
     # admin saved. The schedule falls back to the same resolved config.
     effective = overrides.effective_for(conn, cfg)
     channel = effective.channel_id
-    # No token yet (one can be saved from /admin later): nothing to try.
-    if (schedule_enabled(conn, effective) and token_for(conn, cfg)
+    # No token or no channel yet (either can be saved from /admin later): nothing
+    # to try.
+    if (channel and schedule_enabled(conn, effective) and token_for(conn, cfg)
             and scheduled_ingest_due(conn, effective)):
         set_worker_state(conn, "last_ingest_attempt_at", utc_stamp())
         set_worker_state(conn, "ingest_jitter_seconds", jitter_seconds(conn, cfg=effective))

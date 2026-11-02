@@ -363,6 +363,29 @@ def test_the_loop_enqueues_a_scheduled_ingest_when_due(two_conns, cfg, monkeypat
     assert [row[0] for row in other.execute("SELECT kind FROM jobs")] == ["catch_up"]
 
 
+def test_no_channel_yet_means_no_scheduled_scrape(two_conns, cfg, monkeypatch):
+    """A fresh volume waits for a channel; a scrape of nothing would only fail."""
+    from dataclasses import replace
+
+    from discord_scraper import overrides
+    from discord_scraper.worker import loop
+
+    monkeypatch.setattr(loop, "token_for", lambda conn, cfg: "token")
+    conn, other = two_conns
+    set_worker_state(conn, "backup_enabled", "false")
+    empty = replace(cfg, settings=replace(cfg.settings, channel_id=""))
+
+    loop._queue_scheduled_work(conn, empty)
+    assert other.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
+
+    # Saving one on the board is all it takes: the next pass scrapes it.
+    conn.execute("INSERT INTO config (key, value) VALUES ('channel_id', 'c9')")
+    conn.commit()
+    assert overrides.effective_for(conn, empty).channel_id == "c9"
+    loop._queue_scheduled_work(conn, empty)
+    assert other.execute("SELECT channel_id, kind FROM jobs").fetchall()[0][:2] == ("c9", "catch_up")
+
+
 def test_a_disabled_schedule_queues_nothing(two_conns, cfg, monkeypatch):
     from discord_scraper.worker import loop
 
