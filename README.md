@@ -366,3 +366,7 @@ English stopwords come from [stopwords-iso](https://github.com/stopwords-iso/sto
 (MIT, © 2020 Gene Diaz); the licence ships beside the data in
 `src/discord_scraper/data/LICENSE-stopwords.txt`, along with an opt-in Malay
 pack.
+
+## License
+
+MIT — see [LICENSE](LICENSE). The bundled word lists keep their own licence, noted above.
